@@ -12,7 +12,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parent
 BASE = "v0.1.3908"
-REVISION = 3
+REVISION = 4
 UPSTREAM = "yetone/magpie-releases"
 CUSTOM = re.compile(r"v(\d+)\.(\d+)\.(\d+)-workbuddy\.([1-9]\d*)")
 STABLE = re.compile(r"v(\d+)\.(\d+)\.(\d+)")
@@ -65,7 +65,7 @@ def file_hash(path):
 def assets():
     for arch, (title, _) in ARCHES.items():
         yield f"magpie-windows-{arch}.exe"
-        yield f"Magpie-Windows-WorkBuddy-{title}.zip"
+        yield f"Magpie-Windows-{title}.zip"
     yield "SHA256SUMS.txt"
 
 
@@ -83,13 +83,13 @@ def package(source, target, tag, repo):
     version(tag, CUSTOM)
     target.mkdir(parents=True, exist_ok=True)
     for arch, (title, _) in ARCHES.items():
-        name = f"Magpie-Windows-WorkBuddy-{title}"
+        name = f"Magpie-Windows-{title}"
         exe = source / "dist" / f"magpie-windows-{arch}.exe"
         check_exe(exe, arch)
         local_exe = target / exe.name
         local_exe.write_bytes(exe.read_bytes())
         instructions = (
-            f"Magpie Windows WorkBuddy {tag} ({title})\n\n"
+            f"Magpie Windows {tag.split('-', 1)[0]} ({title})\n\n"
             "1. 从 Windows 托盘退出旧版 Magpie。\n"
             "2. 完整解压，打开解压出的文件夹，双击 magpie.exe。\n"
             "3. 在供应商页使用导入或导出 WorkBuddy 账号。\n"

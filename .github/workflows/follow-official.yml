@@ -103,7 +103,7 @@ jobs:
           case "$existing" in
             absent)
               printf 'Core %s. Includes WorkBuddy account JSON import and export.\n\nhttps://github.com/yetone/magpie/releases/tag/%s\n' "$CORE" "$CORE" > notes.txt
-              gh release create "$TAG" --repo "$REPO" --target "$GITHUB_SHA" --draft --title "Magpie Windows $TAG" --notes-file notes.txt
+              gh release create "$TAG" --repo "$REPO" --target "$GITHUB_SHA" --draft --title "Magpie Windows $CORE" --notes-file notes.txt
               ;;
             draft) ;;
             *) exit 1 ;;
@@ -111,4 +111,4 @@ jobs:
           (cd dist && sha256sum --check SHA256SUMS.txt)
           gh release upload "$TAG" dist/* --repo "$REPO" --clobber
           python3 release.py verify "$REPO" "$TAG" dist
-          gh release edit "$TAG" --repo "$REPO" --draft=false --latest
+          gh release edit "$TAG" --repo "$REPO" --draft=false --latest --title "Magpie Windows $CORE"
