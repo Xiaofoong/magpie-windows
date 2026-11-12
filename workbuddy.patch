@@ -1,0 +1,1738 @@
+diff --git a/docs/subsystems/providers-accounts.md b/docs/subsystems/providers-accounts.md
+index 01fe8f728cfa1837b262dd9fafcf0731198e2d5f..7115b7763ffa027914a7f1bdedce2d13b4f04aa1 100644
+--- a/docs/subsystems/providers-accounts.md
++++ b/docs/subsystems/providers-accounts.md
+@@ -1,5 +1,18 @@
+ # Providers and accounts
+ 
++The desktop Providers page can preview a local WorkBuddy or CodeBuddy JSON
++export and import its currently valid accounts. It accepts the Mobile export
++shapes for both regions. Preview never writes credentials. Confirm saves only
++the current access token through the WorkBuddy plugin host. The host checks for
++the same provider and UID under its auth lock and keeps any existing sign-in.
++An expired or unknown expiration requires a fresh sign-in. See
++[`workbuddy_import.go`](../../internal/gui/workbuddy_import.go) and
++[`ImportNewUID`](../../internal/plugin/providers.go).
++The desktop export lists local WorkBuddy sign-ins and saves the selected
++accounts to a native folder picker destination. The JSON remains compatible
++with the mobile importer. See
++[`workbuddy_export.go`](../../internal/gui/workbuddy_export.go).
++
+ The gateway can send a request to three kinds of upstream:
+ 
+ - A **provider** in `providers.json`: an endpoint with one or more API keys. Google Vertex AI's is signed with the user's Google credentials, or with one API key (express mode).
+diff --git a/internal/cli/main.go b/internal/cli/main.go
+index b12514fef79ae4e29cf11e84203eb8beb73eaa7d..c766d6a58ad149c41942b6ea306469bbf75f698f 100644
+--- a/internal/cli/main.go
++++ b/internal/cli/main.go
+@@ -521,6 +521,9 @@ func run(args []string) error {
+ 	}
+ 	if len(args) == 0 {
+ 		if hasGUI {
++			if update.WorkBuddyReleaseChannel() {
++				return runWindow("providers")
++			}
+ 			return runGUI(true, "")
+ 		}
+ 		gateway.Serves = "tui"
+diff --git a/internal/cli/settings_parity_test.go b/internal/cli/settings_parity_test.go
+index 67a9a687cc29d6bea8994ede5489d7e06d8cc6c5..1bb0082c1cccab9ebeedbf3e5447ffb9ad39b21e 100644
+--- a/internal/cli/settings_parity_test.go
++++ b/internal/cli/settings_parity_test.go
+@@ -238,6 +238,9 @@ var cliForRoute = map[string]string{
+ }
+ 
+ var notYet = map[string]string{
++	"GET /api/workbuddy/export":                  W,  // desktop export list
++	"POST /api/workbuddy/export":                 W,  // desktop folder picker
++	"POST /api/workbuddy/import":                 W,  // desktop file selection and preview
+ 	"POST /api/agent-fast":                       A,  // agent_models.go
+ 	"POST /api/agent-models/{id}":                A,  // agent_models.go
+ 	"GET /api/agents/cli":                        A,  // api.go
+diff --git a/internal/gui/api.go b/internal/gui/api.go
+index 627e0a83ed4a18c05e2373df2518ed1e18dba93f..c45b9f5e7510965e6ae584bd8482c1e573bad1f0 100644
+--- a/internal/gui/api.go
++++ b/internal/gui/api.go
+@@ -1143,10 +1143,14 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
+ 		// and the text size, which the Mac's header measures against the
+ 		// traffic lights
+ 		boot := map[string]any{"lang": s.Lang, "theme": s.Theme, "textSize": s.TextSize, "web": isWeb(w)}
++		if !isWeb(w) {
++			boot["workbuddyImport"] = true
++		}
+ 		// and the version that served the page: a browser's page reloads
+ 		// once another answers in its place (visamzh on X), as after its
+ 		// own restart to update (backAsNew)
+ 		boot["version"] = Version
++		boot["workbuddyReleaseChannel"] = update.WorkBuddyReleaseChannel()
+ 		// and the clock the system shows, 12 or 24 hours, which no webview
+ 		// tells the page (iXerol on X); a browser tab keeps its own
+ 		if !isWeb(w) {
+@@ -1587,6 +1591,8 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
+ 	if !isWeb(w) {
+ 		appPageRoutes(mux)
+ 		remoteRoutes(mux, w)
++		mux.HandleFunc("POST /api/workbuddy/import", importAccounts)
++		workBuddyExportRoutes(mux, w)
+ 	}
+ 	privacyModelRoutes(mux)
+ 	maskingRoutes(mux)
+diff --git a/internal/gui/assets/app.css b/internal/gui/assets/app.css
+index c93f1c9cc67fe0af673804d75e163d73f1012700..1c2519054ee48d16f035148763cbc31fbe0a0d57 100644
+--- a/internal/gui/assets/app.css
++++ b/internal/gui/assets/app.css
+@@ -4356,6 +4356,14 @@ html.theming, html.theming *, html.theming *::before, html.theming *::after {
+ .action-confirm h2 { margin: 0 0 12px; font-size: 16px; overflow-wrap: anywhere; }
+ .action-confirm p { margin: 0 0 20px; color: var(--fg-2); line-height: 1.6; white-space: pre-line; overflow-wrap: anywhere; }
+ .action-confirm .bar { display: flex; align-items: center; gap: 10px; margin: 0; }
++.workbuddy-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 4px 0; }
++.workbuddy-import { width: min(560px, calc(100vw - 32px)); }
++.workbuddy-import .bar { flex-wrap: wrap; }
++.workbuddy-import .import-status { margin: 12px 0; }
++.workbuddy-import ul { max-height: 35vh; overflow: auto; padding-inline-start: 22px; }
++.workbuddy-import li { margin: 8px 0; overflow-wrap: anywhere; }
++.workbuddy-import li span { display: block; color: var(--fg-2); }
++.workbuddy-import li label { display: flex; align-items: baseline; gap: 8px; }
+ @media (pointer: coarse) { .action-confirm button { min-height: 44px; min-width: 44px; } }
+ /* ---------- modal ---------- */
+ .modal {
+diff --git a/internal/gui/assets/app.js b/internal/gui/assets/app.js
+index dff131c8b8ec613289067696304b0a24fcbc9bb6..3844eb4f92069f80678c785e2428d303f81a4e9b 100644
+--- a/internal/gui/assets/app.js
++++ b/internal/gui/assets/app.js
+@@ -20145,7 +20145,9 @@ function renderSettings() {
+   // out, or Stable, one a week and an urgent one at once, chosen by the
+   // update feed. It holds for the version row's Check too, so it stays lit
+   // with automatic updates off.
+-  row(t("Update channel"), s.updateChannel === "stable"
++  if (window.bootPrefs?.workbuddyReleaseChannel) {
++    row(t("Update channel"), "", t("Windows WorkBuddy releases")).classList.add("update-channel-row");
++  } else row(t("Update channel"), s.updateChannel === "stable"
+     ? t("One version a week, out for three days first, and urgent fixes at once. What's new lists every change since yours")
+     : t("Every version as soon as it is out"), "",
+     segs([["every", t("Every version")], ["stable", t("Stable")]], s.updateChannel === "stable" ? "stable" : "every",
+@@ -20159,7 +20161,7 @@ function renderSettings() {
+     segsOO(!s.noAutoDownload, (v) => savePrefs({ ...keep, noAutoDownload: !v }))).classList.add("update-download-row");
+   row(t("Restart automatically"), s.noAutoUpdate ? t("While automatic updates are on") : t("Once an update is downloaded, restarts into it without cutting off an agent's request"), "",
+     segsOO(s.autoRestart, (v) => savePrefs({ ...keep, autoRestart: v }))).classList.add("update-restart-row", ...(s.noAutoUpdate ? ["off"] : []));
+-  renderUpdateMirror(row(t("Download source"), "", ""), s);
++  if (!window.bootPrefs?.workbuddyReleaseChannel) renderUpdateMirror(row(t("Download source"), "", ""), s);
+   const open = el("button", "text", t("Open"));
+   open.onclick = () => api("settings/reveal", {}).catch(statusErr);
+   // portable (a data folder beside magpie, #508): everything is in there
+diff --git a/internal/gui/assets/i18n.js b/internal/gui/assets/i18n.js
+index 3fea31ac9f088209acb72e1cf90b4dc1548663a8..69dc8f085932b88dcc21e37d99533ea7e2a69fda 100644
+--- a/internal/gui/assets/i18n.js
++++ b/internal/gui/assets/i18n.js
+@@ -4,6 +4,72 @@
+ // works. {name} slots are filled by t(str, vars).
+ const I18N = {
+   zh: {
++    "No Windows WorkBuddy update has been published yet.": "Windows WorkBuddy 更新渠道暂未发布版本。",
++    "Windows WorkBuddy releases": "Windows WorkBuddy 定制版",
++    "Could not write the export in the selected folder.": "无法在所选文件夹保存导出文件。",
++    "Could not open the folder picker.": "无法打开文件夹选择器。",
++    "Open the desktop app to export accounts.": "请在桌面应用中导出账号。",
++    "Export saved to {path}": "已保存到 {path}",
++    "Saving accounts…": "正在保存账号…",
++    "Reading accounts…": "正在读取账号…",
++    "No WorkBuddy accounts are available to export.": "没有可导出的 WorkBuddy 账号。",
++    "Clear selection": "取消全选",
++    "Select all accounts": "全选账号",
++    "Choose folder and export": "选择文件夹并导出",
++    "Keep this JSON private. It contains the selected accounts’ sign-in credentials.": "请妥善保管此 JSON 文件，其中包含所选账号的登录凭证。",
++    "Select the accounts to export, then choose where to save the JSON.": "选好账号后，选择保存 JSON 的位置。",
++    "Export WorkBuddy accounts": "导出 WorkBuddy 账号",
++    "The export is too large. Select fewer accounts.": "导出内容过大，请减少选择的账号后分批导出",
++    "The account data is incomplete and cannot be exported.": "账号凭证格式不完整，无法导出",
++    "The selected account changed or cannot be exported. Reopen the export list.": "所选账号已变化或不支持导出，请刷新账号列表",
++    "Select 1 to 200 exportable accounts.": "请选择 1 至 200 个可导出的账号",
++    "API keys and linked desktop sign-ins cannot be exported as accounts.": "此项是 API Key 或桌面登录引用，无法导出为账号登录文件",
++    "Available to export": "导出当前保存在本机的登录凭证",
++    "WorkBuddy account": "WorkBuddy 账号",
++    "Unsupported WorkBuddy / CodeBuddy account format.": "不是支持的 WorkBuddy / CodeBuddy 账号格式",
++    "Unknown account region.": "无法识别账号地区",
++    "Account type and region do not match.": "账号类型与地区不一致",
++    "Invalid account domain.": "账号域名无效",
++    "Unsupported account domain.": "账号域名不在支持范围内",
++    "Account region and domain do not match.": "账号地区与域名不一致",
++    "Account type and domain do not match.": "账号类型与域名不一致",
++    "The account needs a recognized region or domain.": "缺少可识别的账号地区或域名",
++    "The file exceeds 1 MB.": "文件超过 1 MB",
++    "Invalid JSON. Select the original export file.": "JSON 格式错误，请选择原始导出文件",
++    "An account field has an invalid type.": "账号字段类型不正确",
++    "The file must contain an account object or an array.": "文件必须是账号对象或账号数组",
++    "The accounts field must be an array.": "accounts 必须是账号数组",
++    "Select a file with 1 to 200 accounts.": "请选择含 1 至 200 个账号的文件",
++    "Account UIDs do not match.": "账号 UID 不一致",
++    "A valid account UID is required.": "缺少有效的账号 UID",
++    "A valid access token is required.": "缺少有效的访问令牌",
++    "The region and edition do not match.": "region 与 edition 地区标记不一致",
++    "Invalid enterprise ID.": "企业标识无效",
++    "Invalid expiration time.": "有效期字段无效",
++    "Could not read saved accounts. Import stopped.": "已有账号文件无法读取，已停止导入以保护原账号",
++    "Saved account data is invalid. Import stopped.": "已有账号文件损坏，已停止导入以保护原账号",
++    "No expiration time. Sign in again from Providers.": "文件缺少可确认的授权到期时间，请在供应商页面重新登录",
++    "Authorization expired. Sign in again from Providers.": "文件里的授权已过期，请在供应商页面重新登录",
++    "WorkBuddy (China)": "WorkBuddy（国内）",
++    "WorkBuddy AI (International)": "WorkBuddy AI（国际）",
++    "Duplicate account. The existing sign-in will be kept.": "重复账号，将跳过并保留已有登录",
++    "Ready to import. Sign in again when authorization expires.": "可导入当前授权，到期后请重新登录",
++    "Could not read the import request.": "无法读取导入请求",
++    "Enable subscription accounts in Magpie privacy settings first.": "请先在 Magpie 隐私设置开启订阅账号功能",
++    "Could not save the account. Check the plugin and try again.": "此账号未能保存，请检查插件运行状态后重试",
++    "Duplicate account. The existing sign-in was kept.": "重复账号，已保留已有登录",
++    "Imported. Sign in again from Providers when authorization expires.": "已导入当前授权，到期或失效后请在供应商页面重新登录",
++    "Could not prepare the WorkBuddy plugin. Check the network and plugin and try again.": "无法准备 WorkBuddy 插件，请检查网络或插件状态后重试",
++    "The WorkBuddy community plugin is unavailable.": "WorkBuddy 社区插件尚未就绪",
++    "Import WorkBuddy accounts": "导入 WorkBuddy 账号",
++    "Choose a WorkBuddy or CodeBuddy JSON export to preview its accounts.": "选择 WorkBuddy 或 CodeBuddy 的 JSON 导出文件以预览账号。",
++    "Choose JSON file": "选择 JSON 文件",
++    "Import selected file": "确认导入",
++    "Reading file…": "正在读取文件…",
++    "Importing accounts…": "正在导入账号…",
++    "Could not read the selected file.": "无法读取所选文件。",
++    "Account {n}": "账号 {n}",
++    "Could not import accounts. Try again.": "无法导入账号，请重试。",
+     "Cards": "卡片",
+     "Table": "表格",
+     "Quick check": "快速检测",
+diff --git a/internal/gui/assets/index.html b/internal/gui/assets/index.html
+index 157fc1b9a115968e34198974d9ebe6893ac5fa2a..0d4d977fe17869ce856466ea9946aacf75de87ec 100644
+--- a/internal/gui/assets/index.html
++++ b/internal/gui/assets/index.html
+@@ -140,6 +140,10 @@
+   <div class="row-head off-head" id="offHead" hidden><button class="fold" id="foldOff" aria-expanded="false" aria-controls="offProviders"><span class="label" data-t>Turned off</span><span class="note" id="offCount"></span></button></div>
+   <div class="list" id="offProviders" hidden></div>
+   <div id="excluded"></div>
++  <div class="workbuddy-actions" id="workbuddyActions" hidden>
++    <button class="text" id="workbuddyImport" type="button" data-t>Import WorkBuddy accounts</button>
++    <button class="text" id="workbuddyExport" type="button" data-t>Export WorkBuddy accounts</button>
++  </div>
+   <div class="after-list">
+     <button class="text" id="addProvider" data-t>＋ Add provider</button>
+   </div>
+@@ -611,6 +615,8 @@
+ <script src="plugins/otel/i18n.js"></script>
+ <script src="purposes.js"></script>
+ <script src="app.js"></script>
++<script src="workbuddy-import.js"></script>
++<script src="workbuddy-export.js"></script>
+ <script src="plugins.js"></script>
+ <script src="pluginpages.js"></script>
+ <script src="context.js"></script>
+diff --git a/internal/gui/assets/workbuddy-export.js b/internal/gui/assets/workbuddy-export.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..6118a61b303dea90f9b9b041fd7304da0a8e0a24
+--- /dev/null
++++ b/internal/gui/assets/workbuddy-export.js
+@@ -0,0 +1,95 @@
++(() => {
++  const entry = $("#workbuddyExport");
++  if (!entry || !window.bootPrefs?.workbuddyImport || mode !== "window") return;
++  entry.onclick = async () => {
++    const dialog = el("dialog", "action-confirm workbuddy-import");
++    const title = el("h2", "", t("Export WorkBuddy accounts"));
++    title.id = "workbuddyExportTitle";
++    dialog.setAttribute("aria-labelledby", title.id);
++    const instructions = el("p", "", t("Select the accounts to export, then choose where to save the JSON."));
++    const warning = el("p", "", t("Keep this JSON private. It contains the selected accounts’ sign-in credentials."));
++    const status = el("p", "import-status", t("Reading accounts…"));
++    status.setAttribute("role", "status");
++    const list = el("ul");
++    list.hidden = true;
++    const all = el("button", "text", t("Select all accounts"));
++    const close = el("button", "text", t("Close"));
++    const save = el("button", "text primary", t("Choose folder and export"));
++    all.disabled = save.disabled = true;
++    const bar = el("div", "bar");
++    bar.append(all, el("span", "grow"), close, save);
++    dialog.append(title, instructions, warning, list, bar, status);
++
++    let saving = false;
++    const choices = [];
++    const selected = () => choices.filter(({ input }) => input.checked);
++    function sync() {
++      const count = selected().length;
++      all.disabled = saving || !choices.length;
++      save.disabled = saving || count === 0 || count > 200;
++      all.textContent = t(count === choices.length && count > 0 ? "Clear selection" : "Select all accounts");
++      for (const { input } of choices) input.disabled = saving;
++    }
++
++    all.onclick = () => {
++      const check = selected().length !== choices.length;
++      for (const { input } of choices) input.checked = check;
++      status.textContent = check && choices.length > 200 ? t("Select 1 to 200 exportable accounts.") : "";
++      sync();
++    };
++    save.onclick = async () => {
++      const keys = selected().map(({ key }) => key);
++      if (save.disabled) return;
++      saving = close.disabled = true;
++      sync();
++      status.textContent = t("Saving accounts…");
++      try {
++        const result = await api("workbuddy/export", { keys, language: locale });
++        status.textContent = result.canceled ? "" : t("Export saved to {path}", { path: result.path });
++      } catch (error) {
++        status.textContent = t(error.message);
++      } finally {
++        saving = close.disabled = false;
++        sync();
++        close.focus(NO_SCROLL);
++      }
++    };
++    close.onclick = () => dialog.close();
++    dialog.addEventListener("cancel", (event) => { if (saving) event.preventDefault(); });
++    dialog.addEventListener("keydown", (event) => event.stopPropagation());
++    dialog.addEventListener("close", () => {
++      dialog.remove();
++      entry.focus(NO_SCROLL);
++    });
++    document.body.append(dialog);
++    dialog.showModal();
++    close.focus(NO_SCROLL);
++
++    try {
++      const { accounts } = await api("workbuddy/export");
++      if (!dialog.open) return;
++      const masked = window.hideAccounts?.on();
++      for (const [index, row] of accounts.entries()) {
++        const input = el("input");
++        input.type = "checkbox";
++        input.disabled = !row.exportable;
++        input.onchange = () => {
++          status.textContent = selected().length > 200 ? t("Select 1 to 200 exportable accounts.") : "";
++          sync();
++        };
++        const name = masked ? t("Account {n}", { n: index + 1 }) : row.name;
++        const label = el("label");
++        label.append(input, el("b", "", name + " · " + t(row.site)));
++        const item = el("li", "", label);
++        item.append(el("span", "", t(row.detail)));
++        list.append(item);
++        if (row.exportable) choices.push({ input, key: row.key });
++      }
++      list.hidden = !accounts.length;
++      status.textContent = choices.length ? "" : t("No WorkBuddy accounts are available to export.");
++      sync();
++    } catch (error) {
++      if (dialog.open) status.textContent = t(error.message);
++    }
++  };
++})();
+diff --git a/internal/gui/assets/workbuddy-import.js b/internal/gui/assets/workbuddy-import.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..37f6174d24db8a73605737ce895328c585839445
+--- /dev/null
++++ b/internal/gui/assets/workbuddy-import.js
+@@ -0,0 +1,106 @@
++(() => {
++  const entry = $("#workbuddyImport");
++  if (!entry || !window.bootPrefs?.workbuddyImport || mode !== "window") return;
++  $("#workbuddyActions").hidden = false;
++  entry.onclick = () => {
++    const dialog = el("dialog", "action-confirm workbuddy-import");
++    const title = el("h2", "", t("Import WorkBuddy accounts"));
++    title.id = "workbuddyImportTitle";
++    dialog.setAttribute("aria-labelledby", title.id);
++    const description = el("p", "", t("Choose a WorkBuddy or CodeBuddy JSON export to preview its accounts."));
++    const status = el("p", "import-status");
++    status.setAttribute("role", "status");
++    const accounts = el("ul");
++    accounts.hidden = true;
++    const input = el("input");
++    input.type = "file";
++    input.accept = ".json,application/json";
++    input.hidden = true;
++    const choose = el("button", "text", t("Choose JSON file"));
++    const close = el("button", "text", t("Close"));
++    const confirm = el("button", "text primary", t("Import selected file"));
++    confirm.disabled = true;
++    const bar = el("div", "bar");
++    bar.append(choose, el("span", "grow"), close, confirm);
++    dialog.append(title, description, input, bar, status, accounts);
++
++    let data = "", saving = false, selection = 0;
++    function showRows(rows) {
++      const masked = window.hideAccounts?.on();
++      accounts.replaceChildren(...rows.map((row) => {
++        const name = masked || row.status === "invalid" ? t("Account {n}", { n: row.index + 1 }) : row.name;
++        const item = el("li", "", el("b", "", [name, row.site && t(row.site)].filter(Boolean).join(" · ")));
++        item.append(el("span", "", t(row.detail)));
++        return item;
++      }));
++      accounts.hidden = rows.length === 0;
++    }
++
++    choose.onclick = () => input.click();
++    input.onchange = async () => {
++      const file = input.files[0];
++      input.value = "";
++      if (!file) return;
++      const current = ++selection;
++      data = "";
++      confirm.disabled = true;
++      showRows([]);
++      if (file.size > 1 << 20) {
++        status.textContent = t("The file exceeds 1 MB.");
++        return;
++      }
++      status.textContent = t("Reading file…");
++      let contents;
++      try {
++        contents = await file.text();
++      } catch {
++        if (selection === current) status.textContent = t("Could not read the selected file.");
++        return;
++      }
++      if (selection !== current) return;
++      try {
++        const result = await api("workbuddy/import", { data: contents, commit: false });
++        if (selection !== current) return;
++        showRows(result.accounts);
++        status.textContent = "";
++        if (result.accounts.some((row) => row.status === "ready")) {
++          data = contents;
++          confirm.disabled = false;
++        }
++      } catch (error) {
++        if (selection === current) status.textContent = t(error.message);
++      }
++    };
++
++    confirm.onclick = async () => {
++      if (!data || saving) return;
++      saving = choose.disabled = close.disabled = confirm.disabled = true;
++      status.textContent = t("Importing accounts…");
++      try {
++        const result = await api("workbuddy/import", { data, commit: true });
++        showRows(result.accounts);
++        status.textContent = "";
++        if (!result.accounts.some((row) => row.status === "failed")) data = "";
++        if (result.accounts.some((row) => row.status === "imported")) loadProviders().catch(() => {});
++      } catch (error) {
++        status.textContent = t(error.message);
++      } finally {
++        saving = choose.disabled = close.disabled = false;
++        confirm.disabled = !data;
++        close.focus(NO_SCROLL);
++      }
++    };
++    close.onclick = () => dialog.close();
++    dialog.addEventListener("cancel", (event) => { if (saving) event.preventDefault(); });
++    dialog.addEventListener("keydown", (event) => event.stopPropagation());
++    dialog.addEventListener("close", () => {
++      selection++;
++      data = "";
++      dialog.remove();
++      entry.focus(NO_SCROLL);
++    });
++    document.body.append(dialog);
++    dialog.showModal();
++    choose.focus(NO_SCROLL);
++  };
++})();
+diff --git a/internal/gui/tests/workbuddy-import.test.cjs b/internal/gui/tests/workbuddy-import.test.cjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..7eef44fb9ecb4291de752d72f325d4fb877db1f2
+--- /dev/null
++++ b/internal/gui/tests/workbuddy-import.test.cjs
+@@ -0,0 +1,53 @@
++const assert = require("node:assert/strict");
++const fs = require("node:fs/promises");
++const path = require("node:path");
++const { test } = require("node:test");
++const { chromium } = require("playwright");
++
++const assets = process.env.MAGPIE_ASSETS || path.resolve(__dirname, "../assets");
++const file = JSON.stringify({ uid: "fixture-1", accessToken: "fixture-token", edition: "cn", expiresAt: 1800000000 });
++
++test("WorkBuddy file preview and confirmation on the desktop Providers page", async (t) => {
++  const browser = await chromium.launch(process.env.CHROMIUM_EXE ? { executablePath: process.env.CHROMIUM_EXE } : { channel: "chromium" });
++  t.after(() => browser.close());
++  const page = await browser.newPage({ viewport: { width: 480, height: 700 } });
++  page.setDefaultTimeout(6000);
++  const posts = [];
++  await page.route("**/*", async (route) => {
++    const url = new URL(route.request().url());
++    const json = (data) => route.fulfill({ json: data });
++    if (url.pathname === "/boot.js") return route.fulfill({ contentType: "text/javascript", body: 'window.bootPrefs = {lang:"zh",theme:"light",workbuddyImport:true};' });
++    if (url.pathname === "/wails/runtime.js") return route.fulfill({ contentType: "text/javascript", body: "export const Window = {};" });
++    if (url.pathname === "/api/state") return json({ agents: [], profiles: [], settings: { lang: "zh" } });
++    if (url.pathname === "/api/providers") return json({ providers: [], presets: [], excluded: [], gateway: {}, plugins: [] });
++    if (url.pathname === "/api/workbuddy/import") {
++      const { data, commit } = route.request().postDataJSON();
++      posts.push({ data, commit });
++      const detail = commit ? "Imported. Sign in again from Providers when authorization expires." : "Ready to import. Sign in again when authorization expires.";
++      return json({ accounts: [{ name: "Fixture account", site: "WorkBuddy (China)", index: 0, status: commit ? "imported" : "ready", detail }] });
++    }
++    if (url.pathname.startsWith("/api/")) return json({});
++    const filename = path.join(assets, url.pathname === "/" ? "index.html" : url.pathname);
++    const contentType = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml" }[path.extname(filename)];
++    try { await route.fulfill({ body: await fs.readFile(filename), contentType }); } catch { await route.fulfill({ status: 404 }); }
++  });
++  await page.goto("http://magpie.test/?view=providers");
++  const entry = page.getByRole("button", { name: "导入 WorkBuddy 账号" });
++  await entry.click();
++  const dialog = page.getByRole("dialog");
++  const upload = () => dialog.locator('input[type="file"]').setInputFiles({ name: "fixture.json", mimeType: "application/json", buffer: Buffer.from(file) });
++  await upload();
++  await dialog.getByText("Fixture account", { exact: false }).waitFor();
++  assert.deepEqual(posts, [{ data: file, commit: false }]);
++  assert.doesNotMatch(await dialog.textContent(), /fixture-token/);
++  await page.keyboard.press("Escape");
++  await dialog.waitFor({ state: "detached" });
++  assert.equal(posts.length, 1);
++
++  await entry.click();
++  await upload();
++  await dialog.getByRole("button", { name: "确认导入" }).click();
++  await dialog.getByText("已导入当前授权，到期或失效后请在供应商页面重新登录").waitFor();
++  assert.deepEqual(posts, [{ data: file, commit: false }, { data: file, commit: false }, { data: file, commit: true }]);
++  assert.equal(await dialog.getByRole("button", { name: "确认导入" }).isDisabled(), true);
++});
+diff --git a/internal/gui/workbuddy_export.go b/internal/gui/workbuddy_export.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..849ea0186af797a94e00973ca63f28ca0e8ef6ba
+--- /dev/null
++++ b/internal/gui/workbuddy_export.go
+@@ -0,0 +1,196 @@
++package gui
++
++import (
++	"encoding/json"
++	"errors"
++	"net/http"
++	"sort"
++	"strconv"
++	"strings"
++
++	"github.com/yetone/magpie/internal/provider"
++
++	"github.com/yetone/magpie/internal/plugin"
++)
++
++type exportPreview struct {
++	Key        string `json:"key"`
++	Name       string `json:"name"`
++	Site       string `json:"site"`
++	Exportable bool   `json:"exportable"`
++	Detail     string `json:"detail"`
++}
++
++func exportString(v any) string { s, _ := v.(string); return s }
++func exportMillis(v any) int64 {
++	switch n := v.(type) {
++	case float64:
++		if n > 0 && n <= 32503680000000 {
++			return int64(n)
++		}
++	case int64:
++		return n
++	case int:
++		return int64(n)
++	case json.Number:
++		x, _ := n.Int64()
++		return x
++	case string:
++		x, _ := strconv.ParseInt(n, 10, 64)
++		return x
++	}
++	return 0
++}
++func exportName(a map[string]any) string {
++	if name := exportString(a["nickname"]); name != "" {
++		return name
++	}
++	name := exportString(a["accountId"])
++	uid := exportString(a["uid"])
++	enterprise := exportString(a["enterpriseId"])
++	suffix := " · " + uid
++	if enterprise != "" {
++		suffix += " · " + enterprise
++	}
++	if uid != "" {
++		name = strings.TrimSuffix(name, suffix)
++	}
++	return firstImport(name, uid, "WorkBuddy account")
++}
++func workbuddyExports(all map[string]map[string]any) []exportPreview {
++	rows := []exportPreview{}
++	keys := make([]string, 0, len(all))
++	for key := range all {
++		keys = append(keys, key)
++	}
++	sort.Strings(keys)
++	for _, key := range keys {
++		site := plugin.ProviderOf(key)
++		if site != "workbuddy" && site != "workbuddy-ai" {
++			continue
++		}
++		a := all[key]
++		ok := a["type"] == "oauth" && exportString(a["source"]) == "" && exportString(a["uid"]) != "" && exportString(a["access"]) != ""
++		detail := "Available to export"
++		if !ok {
++			detail = "API keys and linked desktop sign-ins cannot be exported as accounts."
++		}
++		rows = append(rows, exportPreview{key, exportName(a), map[string]string{"workbuddy": "WorkBuddy (China)", "workbuddy-ai": "WorkBuddy AI (International)"}[site], ok, detail})
++	}
++	return rows
++}
++
++// Selection is a fresh, read-only snapshot; unlike plugin.Take it never signs
++// out accounts or rotates tokens. The explicit export response alone has secrets.
++func workbuddyExportData(all map[string]map[string]any, keys []string) (string, error) {
++	if len(keys) == 0 || len(keys) > 200 {
++		return "", errors.New("Select 1 to 200 exportable accounts.")
++	}
++	available := map[string]bool{}
++	for _, row := range workbuddyExports(all) {
++		available[row.Key] = row.Exportable
++	}
++	selected := map[string]bool{}
++	rows := make([]map[string]any, 0, len(keys))
++	for _, key := range keys {
++		if selected[key] {
++			continue
++		}
++		selected[key] = true
++		if !available[key] {
++			return "", errors.New("The selected account changed or cannot be exported. Reopen the export list.")
++		}
++		a := all[key]
++		site := plugin.ProviderOf(key)
++		edition := "cn"
++		if site == "workbuddy-ai" {
++			edition = "intl"
++		}
++		row := map[string]any{"provider": site, "edition": edition, "uid": exportString(a["uid"]), "nickname": exportName(a), "accessToken": exportString(a["access"]), "expiresAt": exportMillis(a["expires"]), "domain": exportString(a["domain"])}
++		if refresh := exportString(a["refresh"]); refresh != "" {
++			row["refreshToken"] = refresh
++		}
++		if e := exportString(a["enterpriseId"]); e != "" {
++			row["enterpriseId"] = e
++		}
++		if n := exportMillis(a["refreshExpiresAt"]); n > 0 {
++			row["refreshExpiresAt"] = n
++		}
++		if t := exportString(a["tokenType"]); t != "" {
++			row["tokenType"] = t
++		}
++		// Validate the file we offer against our importer before exposing it.
++		b, _ := json.Marshal(row)
++		var check importFileRow
++		if json.Unmarshal(b, &check) != nil {
++			return "", errors.New("The account data is incomplete and cannot be exported.")
++		}
++		if _, err := normalizeImport(check); err != nil {
++			return "", errors.New("The account data is incomplete and cannot be exported.")
++		}
++		rows = append(rows, row)
++	}
++	b, err := json.MarshalIndent(rows, "", "  ")
++	if err != nil || len(b)+1 > 1<<20 {
++		return "", errors.New("The export is too large. Select fewer accounts.")
++	}
++	return string(b) + "\n", nil
++}
++func workBuddyExportRoutes(mux *http.ServeMux, w Windows) {
++	mux.HandleFunc("GET /api/workbuddy/export", func(rw http.ResponseWriter, r *http.Request) {
++		rw.Header().Set("Cache-Control", "no-store")
++		all, err := readImport()
++		if err != nil {
++			fail(rw, err)
++			return
++		}
++		writeJSON(rw, map[string]any{"accounts": workbuddyExports(all)})
++	})
++	mux.HandleFunc("POST /api/workbuddy/export", func(rw http.ResponseWriter, r *http.Request) {
++		rw.Header().Set("Cache-Control", "no-store")
++		if w == nil {
++			fail(rw, errors.New("Open the desktop app to export accounts."))
++			return
++		}
++		var in struct {
++			Keys     []string `json:"keys"`
++			Language string   `json:"language"`
++		}
++		if err := json.NewDecoder(http.MaxBytesReader(rw, r.Body, 65536)).Decode(&in); err != nil || len(in.Keys) == 0 || len(in.Keys) > 200 {
++			fail(rw, errors.New("Select 1 to 200 exportable accounts."))
++			return
++		}
++		title := "Choose a folder for the WorkBuddy export"
++		if in.Language == "zh" {
++			title = "选择 WorkBuddy 账号导出的保存位置"
++		}
++		dir, err := w.ChooseFolder(title)
++		if err != nil {
++			fail(rw, errors.New("Could not open the folder picker."))
++			return
++		}
++		if dir == "" {
++			writeJSON(rw, map[string]bool{"canceled": true})
++			return
++		}
++		// Read again after the dialog. A sign-in may have changed while it was open.
++		all, err := readImport()
++		if err != nil {
++			fail(rw, err)
++			return
++		}
++		data, err := workbuddyExportData(all, in.Keys)
++		if err != nil {
++			fail(rw, err)
++			return
++		}
++		paths, err := provider.WriteExport(provider.ExportResult{
++			Files: []provider.ExportFile{{Name: "workbuddy-accounts.json", Data: []byte(data)}},
++		}, dir)
++		if err != nil {
++			fail(rw, errors.New("Could not write the export in the selected folder."))
++			return
++		}
++		writeJSON(rw, map[string]string{"path": paths[0]})
++	})
++}
+diff --git a/internal/gui/workbuddy_export_test.go b/internal/gui/workbuddy_export_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..05844d91edbbbc3e07eb4496c6d6f88227167d14
+--- /dev/null
++++ b/internal/gui/workbuddy_export_test.go
+@@ -0,0 +1,75 @@
++package gui
++
++import (
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++)
++
++func TestWorkBuddyExportWritesOnlySelectedAccounts(t *testing.T) {
++	all := importHarness(t)
++	for _, text := range []string{cnFixture, aiFixture} {
++		rows, err := parseImport(currentFixture(text))
++		if err != nil {
++			t.Fatal(err)
++		}
++		a, err := normalizeImport(rows[0])
++		if err != nil {
++			t.Fatal(err)
++		}
++		all[a.site+"#fixture"] = a.auth
++	}
++	all["workbuddy#fixture"]["refresh"] = "fixture-saved-refresh"
++	all["workbuddy#desktop"] = map[string]any{"source": "desktop", "type": "oauth", "access": "fixture-desktop-secret"}
++	all["other"] = map[string]any{"type": "oauth", "access": "fixture-other-secret"}
++	dir := t.TempDir()
++	request := func(host Windows, method, body string) *httptest.ResponseRecorder {
++		w := httptest.NewRecorder()
++		Handler(host, nil).ServeHTTP(w, httptest.NewRequest(method, "/api/workbuddy/export", strings.NewReader(body)))
++		return w
++	}
++	post := `{"keys":["workbuddy#fixture"]}`
++	preview := request(pickFolder{dir: dir}, http.MethodGet, "")
++	if preview.Code != 200 || strings.Contains(preview.Body.String(), "fixture-access") || strings.Contains(preview.Body.String(), "fixture-saved-refresh") || strings.Contains(preview.Body.String(), "fixture-other-secret") {
++		t.Fatal("export preview was unavailable or contained credentials")
++	}
++	cancel := request(pickFolder{}, http.MethodPost, post)
++	if cancel.Code != 200 || !strings.Contains(cancel.Body.String(), "canceled") {
++		t.Fatal("cancel did not stop export")
++	}
++	result := request(pickFolder{dir: dir}, http.MethodPost, post)
++	if result.Code != 200 || strings.Contains(result.Body.String(), "fixture-saved-refresh") {
++		t.Fatalf("export response: status %d", result.Code)
++	}
++	data, err := os.ReadFile(filepath.Join(dir, "workbuddy-accounts.json"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !strings.Contains(string(data), "fixture-saved-refresh") || strings.Contains(string(data), "fixture-access-ai") {
++		t.Fatal("file did not contain exactly the selected sign-in")
++	}
++	rows, err := parseImport(string(data))
++	if err != nil || len(rows) != 1 {
++		t.Fatal("export cannot round trip through the mobile-compatible importer", err)
++	}
++	if a, err := normalizeImport(rows[0]); err != nil || a.uid != "cn-user" || a.auth["refresh"] != nil {
++		t.Fatal("import did not honor its access-token-only policy", err)
++	}
++	if repeat := request(pickFolder{dir: dir}, http.MethodPost, post); repeat.Code != 200 {
++		t.Fatal("repeat export failed")
++	}
++	if _, err := os.Stat(filepath.Join(dir, "workbuddy-accounts-2.json")); err != nil {
++		t.Fatal("repeat export overwrote the first file", err)
++	}
++	if len(all) != 4 || all["workbuddy#fixture"]["refresh"] != "fixture-saved-refresh" {
++		t.Fatal("export changed saved sign-ins")
++	}
++	for _, method := range []string{http.MethodGet, http.MethodPost} {
++		if got := request(webHost{}, method, post); got.Code == 200 && strings.Contains(got.Body.String(), "workbuddy#fixture") {
++			t.Fatal("a browser page could list or export sign-ins")
++		}
++	}
++}
+diff --git a/internal/gui/workbuddy_import.go b/internal/gui/workbuddy_import.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..749aabdb989c376a1548e09648d1affcb36766c5
+--- /dev/null
++++ b/internal/gui/workbuddy_import.go
+@@ -0,0 +1,411 @@
++package gui
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"net/http"
++	"net/url"
++	"strings"
++	"time"
++
++	"github.com/yetone/magpie/internal/plugin"
++	"github.com/yetone/magpie/internal/provider"
++	"github.com/yetone/magpie/internal/settings"
++)
++
++const wbPackage = "@magpie-community/opencode-workbuddy-auth"
++
++type importSecret struct {
++	Access     string `json:"accessToken"`
++	Expires    int64  `json:"expiresAt"`
++	Domain     string `json:"domain"`
++	UID        string `json:"uid"`
++	Name       string `json:"nickname"`
++	Enterprise string `json:"enterpriseId"`
++	TokenType  string `json:"tokenType"`
++}
++type importFileRow struct {
++	Provider string       `json:"provider"`
++	Region   string       `json:"region"`
++	Edition  string       `json:"edition"`
++	Label    string       `json:"label"`
++	UID      string       `json:"uid"`
++	Name     string       `json:"nickname"`
++	Secret   importSecret `json:"secret"`
++	Auth     importSecret `json:"auth"`
++	Flat     importSecret `json:"-"`
++	Account  struct {
++		UID        string `json:"uid"`
++		Name       string `json:"nickname"`
++		Enterprise string `json:"enterpriseId"`
++	} `json:"account"`
++}
++
++// A flat export and a nested export carry the same credential fields. Decode
++// explicitly into both shapes without making unrelated provider types valid.
++func (row *importFileRow) UnmarshalJSON(b []byte) error {
++	type plain importFileRow
++	var value plain
++	if err := json.Unmarshal(b, &value); err != nil {
++		return err
++	}
++	if err := json.Unmarshal(b, &value.Flat); err != nil {
++		return err
++	}
++	*row = importFileRow(value)
++	return nil
++}
++
++type importedAccount struct {
++	site, uid, name string
++	auth            map[string]any
++}
++type importPreview struct {
++	Index  int    `json:"index"`
++	Name   string `json:"name"`
++	Site   string `json:"site"`
++	Status string `json:"status"`
++	Detail string `json:"detail"`
++}
++
++func firstImport(values ...string) string {
++	for _, v := range values {
++		if strings.TrimSpace(v) != "" {
++			return strings.TrimSpace(v)
++		}
++	}
++	return ""
++}
++func importMillis(n int64) int64 {
++	if n > 0 && n < 100000000000 {
++		return n * 1000
++	}
++	return n
++}
++func importSite(providerID, region, domain string) (string, error) {
++	p := strings.ToLower(strings.TrimSpace(providerID))
++	r := strings.ToLower(strings.TrimSpace(region))
++	site := ""
++	switch p {
++	case "codebuddy", "workbuddy", "workbuddy-cn", "codebuddy-cn":
++		site = "workbuddy"
++	case "workbuddy-ai", "workbuddy-intl", "codebuddy-intl", "codebuddy-ai":
++		site = "workbuddy-ai"
++	case "":
++	default:
++		return "", errors.New("Unsupported WorkBuddy / CodeBuddy account format.")
++	}
++	regional := ""
++	switch r {
++	case "cn", "china", "domestic":
++		regional = "workbuddy"
++	case "international", "intl", "global", "ai", "overseas":
++		regional = "workbuddy-ai"
++	case "":
++	default:
++		return "", errors.New("Unknown account region.")
++	}
++	if p != "codebuddy" && site != "" && regional != "" && site != regional {
++		return "", errors.New("Account type and region do not match.")
++	}
++	if regional != "" {
++		site = regional
++	}
++	host := strings.ToLower(strings.TrimSpace(domain))
++	if strings.Contains(host, "://") {
++		u, e := url.Parse(host)
++		if e != nil || u.Scheme != "https" || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
++			return "", errors.New("Invalid account domain.")
++		}
++		host = u.Host
++	}
++	ds := ""
++	switch host {
++	case "copilot.tencent.com", "www.codebuddy.cn", "codebuddy.cn":
++		ds = "workbuddy"
++	case "www.workbuddy.ai", "workbuddy.ai", "www.codebuddy.ai", "codebuddy.ai":
++		ds = "workbuddy-ai"
++	case "":
++	default:
++		return "", errors.New("Unsupported account domain.")
++	}
++	// codebuddy is an export's generic label; the official domain is decisive.
++	if ds != "" {
++		if regional != "" && regional != ds {
++			return "", errors.New("Account region and domain do not match.")
++		}
++		if p != "" && p != "codebuddy" && site != "" && site != ds {
++			return "", errors.New("Account type and domain do not match.")
++		}
++		site = ds
++	}
++	if site == "" {
++		return "", errors.New("The account needs a recognized region or domain.")
++	}
++	return site, nil
++}
++func parseImport(data string) ([]importFileRow, error) {
++	if len(data) > 1<<20 {
++		return nil, errors.New("The file exceeds 1 MB.")
++	}
++	data = strings.TrimPrefix(strings.TrimSpace(data), "\ufeff")
++	var raw json.RawMessage
++	if json.Unmarshal([]byte(data), &raw) != nil {
++		return nil, errors.New("Invalid JSON. Select the original export file.")
++	}
++	var rows []importFileRow
++	if len(raw) > 0 && raw[0] == '[' {
++		if json.Unmarshal(raw, &rows) != nil {
++			return nil, errors.New("An account field has an invalid type.")
++		}
++	} else {
++		var envelope map[string]json.RawMessage
++		if json.Unmarshal(raw, &envelope) != nil || envelope == nil {
++			return nil, errors.New("The file must contain an account object or an array.")
++		}
++		if accounts, ok := envelope["accounts"]; ok {
++			if json.Unmarshal(accounts, &rows) != nil {
++				return nil, errors.New("The accounts field must be an array.")
++			}
++		} else {
++			var row importFileRow
++			if json.Unmarshal(raw, &row) != nil {
++				return nil, errors.New("An account field has an invalid type.")
++			}
++			rows = []importFileRow{row}
++		}
++	}
++	if len(rows) == 0 || len(rows) > 200 {
++		return nil, errors.New("Select a file with 1 to 200 accounts.")
++	}
++	return rows, nil
++}
++func normalizeImport(row importFileRow) (importedAccount, error) {
++	s := row.Secret
++	if s.Access == "" {
++		s = row.Auth
++	}
++	if s.Access == "" {
++		s = row.Flat
++	}
++	uid := firstImport(row.UID, s.UID, row.Account.UID)
++	for _, v := range []string{row.UID, s.UID, row.Account.UID} {
++		if v != "" && strings.TrimSpace(v) != uid {
++			return importedAccount{}, errors.New("Account UIDs do not match.")
++		}
++	}
++	if uid == "" || len(uid) > 256 || strings.ContainsAny(uid, "\r\n\x00") {
++		return importedAccount{}, errors.New("A valid account UID is required.")
++	}
++	if strings.TrimSpace(s.Access) == "" || len(s.Access) > 32768 || strings.ContainsAny(s.Access, "\r\n\x00") {
++		return importedAccount{}, errors.New("A valid access token is required.")
++	}
++	if row.Region != "" && row.Edition != "" {
++		a, e1 := importSite("", row.Region, "")
++		b, e2 := importSite("", row.Edition, "")
++		if e1 != nil || e2 != nil || a != b {
++			return importedAccount{}, errors.New("The region and edition do not match.")
++		}
++	}
++	site, err := importSite(row.Provider, firstImport(row.Region, row.Edition), s.Domain)
++	if err != nil {
++		return importedAccount{}, err
++	}
++	name := firstImport(row.Name, s.Name, row.Account.Name, row.Label, uid)
++	if len(name) > 300 {
++		name = uid
++	}
++	enterprise := firstImport(s.Enterprise, row.Account.Enterprise)
++	if len(enterprise) > 256 || strings.ContainsAny(enterprise, "\r\n\x00") {
++		return importedAccount{}, errors.New("Invalid enterprise ID.")
++	}
++	domain := strings.TrimSpace(s.Domain)
++	if strings.Contains(domain, "://") {
++		u, _ := url.Parse(domain)
++		domain = u.Host
++	}
++	expires := importMillis(s.Expires)
++	if expires < 0 || expires > 32503680000000 {
++		return importedAccount{}, errors.New("Invalid expiration time.")
++	}
++	// A relative lifetime without the time the token was issued is unknown.
++	accountID := name + " · " + uid
++	if enterprise != "" {
++		accountID += " · " + enterprise
++	}
++	// WorkBuddy spends a refresh token once. Copying it into another client
++	// can invalidate the session still in use by the original client.
++	auth := map[string]any{"type": "oauth", "access": s.Access, "expires": expires, "uid": uid, "accountId": accountID, "domain": domain}
++	auth["nickname"] = name
++	if enterprise != "" {
++		auth["enterpriseId"] = enterprise
++	}
++	if s.TokenType != "" && len(s.TokenType) < 100 {
++		auth["tokenType"] = s.TokenType
++	}
++	return importedAccount{site, uid, name, auth}, nil
++}
++func existingImports() (map[string]map[string]any, error) {
++	entries, err := plugin.AuthEntries()
++	if err != nil {
++		return nil, errors.New("Could not read saved accounts. Import stopped.")
++	}
++	auths := make(map[string]map[string]any, len(entries))
++	for key, raw := range entries {
++		var auth map[string]any
++		if json.Unmarshal(raw, &auth) != nil || auth == nil {
++			return nil, errors.New("Saved account data is invalid. Import stopped.")
++		}
++		auths[key] = auth
++	}
++	return auths, nil
++}
++
++func importDuplicate(a importedAccount, all map[string]map[string]any) bool {
++	for key, v := range all {
++		if plugin.ProviderOf(key) != a.site {
++			continue
++		}
++		if v["uid"] == a.uid {
++			return true
++		}
++	}
++	// Keep any existing seat for the UID: never overwrite it with exported
++	// credentials, even when an export omitted the original enterprise ID.
++	return false
++}
++func importLoginProblem(a importedAccount, now int64) string {
++	expires, _ := a.auth["expires"].(int64)
++	if expires <= 1 {
++		return "No expiration time. Sign in again from Providers."
++	}
++	if expires <= now {
++		return "Authorization expired. Sign in again from Providers."
++	}
++	return ""
++}
++
++func previewImports(rows []importFileRow, all map[string]map[string]any) ([]importPreview, []importedAccount) {
++	previews := make([]importPreview, len(rows))
++	normalized := make([]importedAccount, len(rows))
++	seen := map[string]bool{}
++	now := time.Now().UnixMilli()
++	for i, row := range rows {
++		p := importPreview{Index: i, Name: "Account {n}", Status: "invalid"}
++		a, err := normalizeImport(row)
++		if err != nil {
++			p.Detail = err.Error()
++		} else {
++			normalized[i] = a
++			p.Name = a.name
++			p.Site = map[string]string{"workbuddy": "WorkBuddy (China)", "workbuddy-ai": "WorkBuddy AI (International)"}[a.site]
++			id := a.site + "|" + a.uid
++			if seen[id] || importDuplicate(a, all) {
++				p.Status = "duplicate"
++				p.Detail = "Duplicate account. The existing sign-in will be kept."
++			} else if problem := importLoginProblem(a, now); problem != "" {
++				p.Status = "reauth"
++				p.Detail = problem
++			} else {
++				p.Status = "ready"
++				p.Detail = "Ready to import. Sign in again when authorization expires."
++				seen[id] = true
++			}
++		}
++		previews[i] = p
++	}
++	return previews, normalized
++}
++
++var adoptImport = provider.Adopt
++var listImport = plugin.Providers
++var saveImport = plugin.ImportNewUID
++var readImport = existingImports
++var discoveryOffImport = settings.AccountDiscoveryOff
++
++func importAccounts(w http.ResponseWriter, r *http.Request) {
++	w.Header().Set("Content-Type", "application/json")
++	w.Header().Set("Cache-Control", "no-store")
++	fail := func(message string) {
++		w.WriteHeader(400)
++		json.NewEncoder(w).Encode(map[string]string{"error": message})
++	}
++	var in struct {
++		Data   string `json:"data"`
++		Commit bool   `json:"commit"`
++	}
++	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 7<<20)).Decode(&in) != nil {
++		fail("Could not read the import request.")
++		return
++	}
++	rows, err := parseImport(in.Data)
++	if err != nil {
++		fail(err.Error())
++		return
++	}
++	all, err := readImport()
++	if err != nil {
++		fail(err.Error())
++		return
++	}
++	previews, accounts := previewImports(rows, all)
++	if in.Commit {
++		if discoveryOffImport() {
++			fail("Enable subscription accounts in Magpie privacy settings first.")
++			return
++		}
++		ctx, cancel := context.WithTimeout(r.Context(), 4*time.Minute)
++		defer cancel()
++		prepareErrors := map[string]string{}
++		for i, a := range accounts {
++			if previews[i].Status != "ready" {
++				continue
++			}
++			message, prepared := prepareErrors[a.site]
++			if !prepared {
++				message = prepareWorkBuddyImport(ctx, a.site)
++				prepareErrors[a.site] = message
++			}
++			if message != "" {
++				previews[i].Status = "failed"
++				previews[i].Detail = message
++				continue
++			}
++			if problem := importLoginProblem(a, time.Now().UnixMilli()); problem != "" {
++				previews[i].Status = "reauth"
++				previews[i].Detail = problem
++				continue
++			}
++			saved, err := saveImport(ctx, a.site, a.auth)
++			if err != nil {
++				previews[i].Status = "failed"
++				previews[i].Detail = "Could not save the account. Check the plugin and try again."
++				continue
++			}
++			if !saved {
++				previews[i].Status = "duplicate"
++				previews[i].Detail = "Duplicate account. The existing sign-in was kept."
++				continue
++			}
++			previews[i].Status = "imported"
++			previews[i].Detail = "Imported. Sign in again from Providers when authorization expires."
++		}
++	}
++	json.NewEncoder(w).Encode(map[string]any{"accounts": previews, "committed": in.Commit})
++}
++
++func prepareWorkBuddyImport(ctx context.Context, site string) string {
++	if err := adoptImport(ctx, site); err != nil {
++		return "Could not prepare the WorkBuddy plugin. Check the network and plugin and try again."
++	}
++	pps, err := listImport(ctx)
++	if err == nil {
++		for _, p := range pps {
++			if p.ID == site && plugin.PackageName(p.Spec) == wbPackage {
++				return ""
++			}
++		}
++	}
++	return "The WorkBuddy community plugin is unavailable."
++}
+diff --git a/internal/gui/workbuddy_import_test.go b/internal/gui/workbuddy_import_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..e8ff8ef7c7ff0a55083146bb7cdd02acacfdc700
+--- /dev/null
++++ b/internal/gui/workbuddy_import_test.go
+@@ -0,0 +1,193 @@
++package gui
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"net/http/httptest"
++	"strconv"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/yetone/magpie/internal/plugin"
++)
++
++const cnFixture = `{"provider":"codebuddy","uid":"cn-user","nickname":"Fixture CN","secret":{"accessToken":"fixture-access-cn","refreshToken":"fixture-refresh-cn","expiresAt":1800000000,"domain":"copilot.tencent.com","uid":"cn-user"}}`
++const aiFixture = `{"region":"international","auth":{"accessToken":"fixture-access-ai","refreshToken":"fixture-refresh-ai","expiresAt":1800000000,"refreshExpiresIn":86400,"tokenType":"Bearer","domain":"www.workbuddy.ai"},"account":{"uid":"ai-user","nickname":"Fixture AI","enterpriseId":"fixture-team"}}`
++const flatFixture = `{"id":"fixture-id","label":"Fixture label","uid":"flat-cn","nickname":"Fixture flat","accessToken":"fixture-flat-access","refreshToken":"fixture-flat-refresh","expiresAt":1800000000000,"refreshExpiresAt":1801000000000,"domain":"copilot.tencent.com","edition":"cn","type":"personal","enterpriseId":""}`
++
++func TestFlatAndDomesticFormats(t *testing.T) {
++	for _, input := range []string{flatFixture, "[" + flatFixture + "]", `{"accounts":[` + flatFixture + `]}`} {
++		rows, e := parseImport(input)
++		if e != nil || len(rows) != 1 {
++			t.Fatal("flat decode", e)
++		}
++		a, e := normalizeImport(rows[0])
++		if e != nil || a.site != "workbuddy" || a.uid != "flat-cn" || a.auth["expires"] != int64(1800000000000) || a.auth["refreshExpiresAt"] != nil {
++			t.Fatal("flat normalization", e)
++		}
++	}
++	input := strings.ReplaceAll(strings.ReplaceAll(flatFixture, `"edition":"cn"`, `"edition":"intl"`), "copilot.tencent.com", "www.workbuddy.ai")
++	rows, e := parseImport(input)
++	if e != nil {
++		t.Fatal(e)
++	}
++	a, e := normalizeImport(rows[0])
++	if e != nil || a.site != "workbuddy-ai" {
++		t.Fatal("flat international", e)
++	}
++	domestic := strings.ReplaceAll(strings.ReplaceAll(aiFixture, "international", "domestic"), "www.workbuddy.ai", "copilot.tencent.com")
++	rows, e = parseImport(domestic)
++	if e != nil {
++		t.Fatal(e)
++	}
++	a, e = normalizeImport(rows[0])
++	if e != nil || a.site != "workbuddy" {
++		t.Fatal("domestic region", e)
++	}
++	bad := strings.Replace(flatFixture, `"edition":"cn"`, `"edition":"cn","region":"international"`, 1)
++	rows, _ = parseImport(bad)
++	if _, e = normalizeImport(rows[0]); e == nil {
++		t.Fatal("conflicting edition accepted")
++	}
++}
++
++func TestImportFormatsAndTimeUnits(t *testing.T) {
++	for _, data := range []string{"[" + cnFixture + "]", cnFixture, `{"accounts":[` + cnFixture + `]}`} {
++		rows, e := parseImport(data)
++		if e != nil || len(rows) != 1 {
++			t.Fatal("batch format", e)
++		}
++		a, e := normalizeImport(rows[0])
++		if e != nil || a.site != "workbuddy" || a.auth["expires"] != int64(1800000000000) {
++			t.Fatal("CN mapping/time", e)
++		}
++	}
++	rows, e := parseImport(strings.Replace(aiFixture, `"expiresAt":1800000000`, `"expiresIn":3600`, 1))
++	if e != nil {
++		t.Fatal(e)
++	}
++	a, e := normalizeImport(rows[0])
++	if e != nil || a.site != "workbuddy-ai" || a.auth["expires"] != int64(0) || a.auth["enterpriseId"] != "fixture-team" || a.auth["refresh"] != nil {
++		t.Fatal("AI mapping, relative lifetime, enterprise", e)
++	}
++	for _, input := range []string{`null`, `[]`, `{"accounts":{}}`, cnFixture + "garbage", strings.Repeat("x", 1<<20+1)} {
++		if _, e := parseImport(input); e == nil {
++			t.Fatal("invalid input accepted")
++		}
++	}
++}
++func TestImportRejectsMismatchAndUntrustedDomain(t *testing.T) {
++	for _, data := range []string{strings.Replace(cnFixture, "copilot.tencent.com", "evil.invalid", 1), strings.Replace(aiFixture, "international", "cn", 1), strings.Replace(cnFixture, `"uid":"cn-user"}`, `"uid":"other"}`, 1), strings.Replace(cnFixture, `"accessToken":"fixture-access-cn"`, `"accessToken":""`, 1)} {
++		rows, e := parseImport(data)
++		if e != nil {
++			continue
++		}
++		if _, e := normalizeImport(rows[0]); e == nil {
++			t.Fatal("unsafe/mismatched credential accepted")
++		}
++	}
++}
++func importHarness(t *testing.T) map[string]map[string]any {
++	t.Helper()
++	oa, ol, os, or, od := adoptImport, listImport, saveImport, readImport, discoveryOffImport
++	t.Cleanup(func() { adoptImport, listImport, saveImport, readImport, discoveryOffImport = oa, ol, os, or, od })
++	all := map[string]map[string]any{}
++	readImport = func() (map[string]map[string]any, error) { return all, nil }
++	discoveryOffImport = func() bool { return false }
++	adoptImport = func(context.Context, string) error { return nil }
++	listImport = func(context.Context) ([]plugin.Provider, error) {
++		return []plugin.Provider{{ID: "workbuddy", Spec: wbPackage}, {ID: "workbuddy-ai", Spec: wbPackage}}, nil
++	}
++	saveImport = func(_ context.Context, id string, a map[string]any) (bool, error) {
++		key := id + "#" + a["uid"].(string)
++		if all[key] != nil {
++			return false, nil
++		}
++		all[key] = a
++		return true, nil
++	}
++	return all
++}
++func currentFixture(data string) string {
++	return strings.ReplaceAll(data, "1800000000", strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10))
++}
++
++func callImport(t *testing.T, data string, commit bool) string {
++	t.Helper()
++	body, _ := json.Marshal(map[string]any{"data": data, "commit": commit})
++	w := httptest.NewRecorder()
++	Handler(nil, nil).ServeHTTP(w, httptest.NewRequest("POST", "/api/workbuddy/import", strings.NewReader(string(body))))
++	return w.Body.String()
++}
++func TestImportPreviewIsReadOnlyCommitKeepsDuplicates(t *testing.T) {
++	all := importHarness(t)
++	data := currentFixture("[" + cnFixture + "," + aiFixture + "," + cnFixture + "]")
++	preview := callImport(t, data, false)
++	if len(all) != 0 || strings.Contains(preview, "fixture-access") || strings.Contains(preview, "fixture-refresh") || strings.Count(preview, `"status":"ready"`) != 2 || !strings.Contains(preview, `"status":"duplicate"`) {
++		t.Fatal("preview wrote, leaked or miscounted accounts")
++	}
++	committed := callImport(t, data, true)
++	if len(all) != 2 || strings.Count(committed, `"status":"imported"`) != 2 {
++		t.Fatal("did not import both sites")
++	}
++	old := all["workbuddy#cn-user"]["access"]
++	again := callImport(t, strings.ReplaceAll(data, "fixture-access-cn", "new-fixture-access"), true)
++	if len(all) != 2 || all["workbuddy#cn-user"]["access"] != old || strings.Count(again, `"status":"duplicate"`) != 3 {
++		t.Fatal("repeat replaced an existing credential")
++	}
++}
++func TestImportPartialFailureDoesNotLeakOrLoseOthers(t *testing.T) {
++	all := importHarness(t)
++	save := saveImport
++	saveImport = func(ctx context.Context, id string, a map[string]any) (bool, error) {
++		if id == "workbuddy-ai" {
++			return false, errors.New("fixture-refresh-sensitive")
++		}
++		return save(ctx, id, a)
++	}
++	response := callImport(t, currentFixture("["+cnFixture+","+aiFixture+"]"), true)
++	if len(all) != 1 || !strings.Contains(response, `"status":"failed"`) || strings.Contains(response, "sensitive") {
++		t.Fatal("partial failure leaked or lost successful account")
++	}
++	readImport = func() (map[string]map[string]any, error) {
++		return nil, errors.New("Saved account data is invalid. Import stopped.")
++	}
++	response = callImport(t, cnFixture, true)
++	if len(all) != 1 || !strings.Contains(response, `"error"`) {
++		t.Fatal("corrupt storage did not stop import")
++	}
++}
++
++func TestWorkBuddyImportRejectsUnusableExpiryAndNeverCopiesRefresh(t *testing.T) {
++	all := importHarness(t)
++	adoptions := 0
++	adoptImport = func(context.Context, string) error {
++		adoptions++
++		return nil
++	}
++	expired := strings.Replace(cnFixture, `"expiresAt":1800000000`, `"expiresAt":1700000000`, 1)
++	unknown := strings.Replace(aiFixture, `"expiresAt":1800000000`, `"expiresIn":3600`, 1)
++	for _, commit := range []bool{false, true} {
++		result := callImport(t, "["+expired+","+unknown+"]", commit)
++		if len(all) != 0 || adoptions != 0 || strings.Count(result, `"status":"reauth"`) != 2 {
++			t.Fatal("unusable snapshot was allowed to activate")
++		}
++	}
++	result := callImport(t, currentFixture(cnFixture), true)
++	a := all["workbuddy#cn-user"]
++	if !strings.Contains(result, `"status":"imported"`) || a["access"] != "fixture-access-cn" ||
++		a["refresh"] != nil || a["refreshExpiresAt"] != nil {
++		t.Fatal("valid import lost access or copied a refresh token")
++	}
++}
++
++func TestWorkBuddyImportIsDesktopOnly(t *testing.T) {
++	body := strings.NewReader(`{"commit":false,"data":"[]"}`)
++	w := httptest.NewRecorder()
++	Handler(webHost{}, nil).ServeHTTP(w, httptest.NewRequest("POST", "/api/workbuddy/import", body))
++	if strings.Contains(w.Body.String(), "Select a file with 1 to 200 accounts.") || w.Code == 200 {
++		t.Fatal("browser page reached the desktop import endpoint")
++	}
++}
+diff --git a/internal/plugin/host.js b/internal/plugin/host.js
+index 1139a516940afbddbee60baa5a3b02bae27b2faf..4a531594a13b4bc95cc387d41bb562714f19d365 100644
+--- a/internal/plugin/host.js
++++ b/internal/plugin/host.js
+@@ -1177,7 +1177,7 @@ function changeAuth(change) {
+     const unlock = await lockAuth()
+     try {
+       const { all, known } = await readAuthStateAsync()
+-      const out = change(all)
++      const out = change(all, known)
+       // sign-ins that don't read are never written over with none: a
+       // sign-out of one of them waits for the file to be put right
+       if (out !== false && (known || Object.keys(all).length > 0)) await writeAuth(all)
+@@ -3587,6 +3587,21 @@ const handlers = {
+   // import keeps a sign-in made elsewhere as one of provider's accounts;
+   // with a key, as that account again (one taken back)
+   async import(p) {
++    if (p.keepUID) {
++      const uid = uidOf(p.auth)
++      if (!uid) throw new Error("Missing account UID")
++      const key = await changeAuth((all, known) => {
++        if (!known) throw new Error("Saved accounts could not be read")
++        if (p.auth.expires <= Date.now()) throw new Error("Authorization expired")
++        if (accountsOf(all, p.provider).some((k) => uidOf(all[k]) === uid)) return false
++        const key = p.provider + "#" + randomUUID()
++        all[key] = p.auth
++        return key
++      })
++      if (!key) return { account: "" }
++      send({ event: "auth", provider: p.provider, account: key })
++      return { account: key }
++    }
+     if (p.key && providerOf(p.key) === p.provider) {
+       await setAuth(p.key, p.auth)
+       return { account: p.key }
+diff --git a/internal/plugin/providers.go b/internal/plugin/providers.go
+index 57f80609f4f8469ad0135fda65935977e0b7172e..add50c48d4df36359bebc1225ee8a0761c597145 100644
+--- a/internal/plugin/providers.go
++++ b/internal/plugin/providers.go
+@@ -1164,6 +1164,16 @@ func Import(ctx context.Context, provider string, auth map[string]any) (string,
+ 	return r.Account, nil
+ }
+ 
++// ImportNewUID saves a WorkBuddy export without replacing an existing sign-in.
++// The host checks the UID and writes under the same lock.
++func ImportNewUID(ctx context.Context, provider string, auth map[string]any) (bool, error) {
++	var r struct {
++		Account string `json:"account"`
++	}
++	err := Call(ctx, "import", map[string]any{"provider": provider, "auth": auth, "keepUID": true}, &r)
++	return r.Account != "", err
++}
++
+ // Checked is what trying an account gave: the model ids the plugin lists
+ // for it, its usage read (nil when the plugin tells none), and why its
+ // models hook said the vendor refused the sign-in, if it did.
+diff --git a/internal/plugin/workbuddy_import_test.go b/internal/plugin/workbuddy_import_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..f0a7f5287023f0bbc91dd82d592a1816f58350ba
+--- /dev/null
++++ b/internal/plugin/workbuddy_import_test.go
+@@ -0,0 +1,48 @@
++package plugin
++
++import (
++	"context"
++	"sync"
++	"testing"
++	"time"
++)
++
++func TestImportNewUIDKeepsExistingSignIn(t *testing.T) {
++	sandbox(t)
++	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
++	defer cancel()
++	auth := func(uid, access string) map[string]any {
++		return map[string]any{
++			"type": "oauth", "uid": uid, "accountId": uid, "access": access,
++			"expires": time.Now().Add(time.Hour).UnixMilli(),
++		}
++	}
++	original := auth("existing", "fixture-existing")
++	original["refresh"] = "fixture-refresh"
++	if _, err := Import(ctx, "workbuddy", original); err != nil {
++		t.Fatal(err)
++	}
++	saved, err := ImportNewUID(ctx, "workbuddy", auth("existing", "fixture-replacement"))
++	if err != nil || saved {
++		t.Fatalf("same UID replaced an existing sign-in: saved=%v err=%v", saved, err)
++	}
++	var concurrent sync.WaitGroup
++	results := make(chan bool, 2)
++	for range 2 {
++		concurrent.Go(func() {
++			saved, err := ImportNewUID(ctx, "workbuddy", auth("new", "fixture-new"))
++			if err != nil {
++				t.Errorf("concurrent import: %v", err)
++			}
++			results <- saved
++		})
++	}
++	concurrent.Wait()
++	if <-results == <-results {
++		t.Fatal("concurrent import must save exactly one account")
++	}
++	all := Auths("workbuddy")
++	if len(all) != 2 || all["workbuddy"]["access"] != "fixture-existing" || all["workbuddy"]["refresh"] != "fixture-refresh" {
++		t.Fatal("unexpected accounts after concurrent import")
++	}
++}
+diff --git a/internal/update/install.go b/internal/update/install.go
+index e2b269c3edd717dd0855c150e10a5d4d1cf2288c..2a7ad683c2012aaeda46b3be8424b97bd8d8df9c 100644
+--- a/internal/update/install.go
++++ b/internal/update/install.go
+@@ -217,6 +217,10 @@ func Settle() (from, to string) {
+ // settle is Settle for exe: the installed exe to open instead, "" to run
+ // exe where it is.
+ func settle(exe string) (string, error) {
++	// The WorkBuddy edition updates its own EXE, including in Downloads.
++	if WorkBuddyReleaseChannel() {
++		return "", nil
++	}
+ 	to, ok := installed()
+ 	if to == "" || samePath(exe, to) || !downloadFolder(filepath.Dir(exe)) || portableData() != "" {
+ 		return "", nil
+@@ -399,7 +403,7 @@ func clearBeside(from string) {
+ // magpie in place of: nothing is written beside it for a terminal, which
+ // runs the installed one.
+ func forwards(exe string) bool {
+-	if runtime.GOOS != "windows" || os.Getenv(NoInstallEnv) == "1" {
++	if runtime.GOOS != "windows" || WorkBuddyReleaseChannel() || os.Getenv(NoInstallEnv) == "1" {
+ 		return false
+ 	}
+ 	to, ok := installed()
+diff --git a/internal/update/notes.go b/internal/update/notes.go
+index 15129ffa91037fdee614c4e8d2f91113d390e68c..a332a3e73d0c7c2515b70a0912d778dbe71d3fa6 100644
+--- a/internal/update/notes.go
++++ b/internal/update/notes.go
+@@ -37,7 +37,11 @@ func NotesFeed() string {
+ // ReleasePage is version's page on GitHub, where its notes are when the
+ // site can't give them (#661).
+ func ReleasePage(version string) string {
+-	return "https://github.com/yetone/magpie-releases/releases/tag/v" + strings.TrimPrefix(strings.TrimSpace(version), "v")
++	tag := "v" + strings.TrimPrefix(strings.TrimSpace(version), "v")
++	if WorkBuddyReleaseChannel() && workBuddyVersion.MatchString(tag) {
++		return workBuddyReleasePage(tag)
++	}
++	return "https://github.com/yetone/magpie-releases/releases/tag/" + tag
+ }
+ 
+ // NotesBetween asks the site for the notes of every release after after
+diff --git a/internal/update/update.go b/internal/update/update.go
+index 288c036ff960546e435aeb16ff3953cdffcfa0e7..6c78c6963e49ec769ede67ccb2d01c9ebe3f89d2 100644
+--- a/internal/update/update.go
++++ b/internal/update/update.go
+@@ -141,6 +141,9 @@ func LatestEvery(ctx context.Context, lang string) (*Release, error) {
+ }
+ 
+ func latestAt(ctx context.Context, feed, lang string) (*Release, error) {
++	if WorkBuddyReleaseChannel() {
++		return workBuddyLatest(ctx, lang)
++	}
+ 	if githubOnly() {
+ 		return githubLatest(ctx, lang)
+ 	}
+diff --git a/internal/update/workbuddy.go b/internal/update/workbuddy.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..22753c1b7d35cf29d0c30425e34b266eb2cf8fe1
+--- /dev/null
++++ b/internal/update/workbuddy.go
+@@ -0,0 +1,92 @@
++package update
++
++import (
++	"context"
++	"crypto/sha256"
++	"encoding/hex"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"net/http"
++	"strings"
++
++	"github.com/yetone/magpie/internal/lazyre"
++	"github.com/yetone/magpie/internal/source"
++)
++
++// workBuddyReleaseRepo is set in the Windows distribution by the release build.
++var workBuddyReleaseRepo string
++
++var workBuddyVersion = lazyre.New(`^v[0-9]+\.[0-9]+\.[0-9]+-workbuddy\.[1-9][0-9]*$`)
++var workBuddyRepository = lazyre.New(`^[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+$`)
++
++func WorkBuddyReleaseChannel() bool {
++	return goos == "windows" && workBuddyRepository.MatchString(workBuddyReleaseRepo)
++}
++
++func workBuddyReleasePage(tag string) string {
++	return githubWeb + "/" + workBuddyReleaseRepo + "/releases/tag/" + tag
++}
++
++func workBuddyLatest(ctx context.Context, lang string) (*Release, error) {
++	repoAPI := githubAPI + "/repos/" + workBuddyReleaseRepo
++	req, err := http.NewRequestWithContext(ctx, http.MethodGet, repoAPI+"/releases/latest", nil)
++	if err != nil {
++		return nil, err
++	}
++	req.Header.Set("Accept", "application/vnd.github+json")
++	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
++	// GitHub's authenticated HTTPS response supplies the asset checksum.
++	// Mirrors can serve bytes, but never choose what checksum is trusted.
++	strict := *client
++	strict.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
++	res, err := source.DoOfficial(&strict, req)
++	if err != nil {
++		return nil, err
++	}
++	defer res.Body.Close()
++	if res.StatusCode == http.StatusNotFound {
++		return nil, errors.New("No Windows WorkBuddy update has been published yet.")
++	}
++	if res.StatusCode != http.StatusOK {
++		return nil, fmt.Errorf("WorkBuddy update channel: %s", res.Status)
++	}
++	var gh struct {
++		Tag        string `json:"tag_name"`
++		Body       string `json:"body"`
++		Draft      bool   `json:"draft"`
++		Prerelease bool   `json:"prerelease"`
++		Assets     []struct {
++			ID     int64  `json:"id"`
++			Name   string `json:"name"`
++			Size   int64  `json:"size"`
++			State  string `json:"state"`
++			Digest string `json:"digest"`
++		} `json:"assets"`
++	}
++	if err := json.NewDecoder(io.LimitReader(res.Body, 2<<20)).Decode(&gh); err != nil {
++		return nil, fmt.Errorf("WorkBuddy update metadata: %w", err)
++	}
++	if gh.Draft || gh.Prerelease || !workBuddyVersion.MatchString(gh.Tag) || parse(gh.Tag) == nil {
++		return nil, errors.New("invalid Windows WorkBuddy release")
++	}
++	name := "magpie-windows-" + arch() + ".exe"
++	for _, a := range gh.Assets {
++		if a.Name != name || a.State != "uploaded" || a.ID < 1 || a.Size < 1 {
++			continue
++		}
++		hash, ok := strings.CutPrefix(a.Digest, "sha256:")
++		checksum, err := hex.DecodeString(hash)
++		if !ok || err != nil || len(checksum) != sha256.Size {
++			return nil, errors.New("WorkBuddy update is missing a valid SHA-256 checksum")
++		}
++		u := githubWeb + "/" + workBuddyReleaseRepo + "/releases/download/" + gh.Tag + "/" + name
++		asset := Asset{URL: u, GitHub: u, API: fmt.Sprintf("%s/releases/assets/%d", repoAPI, a.ID), Size: a.Size, SHA256: hash}
++		return &Release{
++			Version: strings.TrimPrefix(gh.Tag, "v"), Notes: InLang(gh.Body, lang),
++			URL: workBuddyReleasePage(gh.Tag), Assets: map[string]Asset{name: asset},
++		}, nil
++	}
++	return nil, fmt.Errorf("WorkBuddy update has no %s", name)
++}
+diff --git a/internal/update/workbuddy_test.go b/internal/update/workbuddy_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..c7181321cec07f3ee6c601dfc0a28cd55444175a
+--- /dev/null
++++ b/internal/update/workbuddy_test.go
+@@ -0,0 +1,75 @@
++package update
++
++import (
++	"context"
++	"crypto/sha256"
++	"fmt"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++)
++
++func TestWorkBuddyExecutableStaysAtItsOwnPath(t *testing.T) {
++	fixture := newInstallFixture(t)
++	fixture.installed(t, "standard install", 7)
++	oldRepo, oldOS := workBuddyReleaseRepo, goos
++	workBuddyReleaseRepo, goos = "fixture/magpie-windows", "windows"
++	t.Cleanup(func() { workBuddyReleaseRepo, goos = oldRepo, oldOS })
++	if to, err := settle(fixture.exe); to != "" || err != nil || forwards(fixture.exe) {
++		t.Fatalf("the WorkBuddy executable did not stay in Downloads: %q, %v", to, err)
++	}
++}
++
++func TestWorkBuddyUpdateUsesOnlyItsReleaseChannel(t *testing.T) {
++	const repo, name = "fixture/magpie-windows", "magpie-windows-amd64.exe"
++	body := []byte("fixture desktop executable")
++	digest := fmt.Sprintf("sha256:%x", sha256.Sum256(body))
++	tag := "v0.1.3908-workbuddy.3"
++	releaseDigest := digest
++	downloadBody := body
++	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		switch r.URL.Path {
++		case "/repos/" + repo + "/releases/latest":
++			fmt.Fprintf(w, `{"tag_name":%q,"assets":[{"name":%q,"id":13,"size":%d,"state":"uploaded","digest":%q}]}`, tag, name, len(body), releaseDigest)
++		case "/" + repo + "/releases/download/" + tag + "/" + name:
++			w.Write(downloadBody)
++		default:
++			http.NotFound(w, r)
++		}
++	}))
++	defer srv.Close()
++	oldRepo, oldWeb, oldAPI, oldOS, oldArch := workBuddyReleaseRepo, githubWeb, githubAPI, goos, goarch
++	workBuddyReleaseRepo, githubWeb, githubAPI, goos, goarch = repo, srv.URL, srv.URL, "windows", "amd64"
++	t.Cleanup(func() {
++		workBuddyReleaseRepo, githubWeb, githubAPI, goos, goarch = oldRepo, oldWeb, oldAPI, oldOS, oldArch
++	})
++	t.Setenv("MAGPIE_UPDATE_FEED", "http://127.0.0.1:1/official-feed")
++	quickRetries(t)
++	ctx := context.Background()
++	rel, err := Latest(ctx)
++	if err != nil || !Newer(rel.Version, "0.1.3908-workbuddy.2") {
++		t.Fatal("did not get a newer custom release", err)
++	}
++	file := filepath.Join(t.TempDir(), name)
++	if err := download(ctx, rel.Assets[name], file); err != nil {
++		t.Fatal(err)
++	}
++	if data, _ := os.ReadFile(file); string(data) != string(body) {
++		t.Fatal("download was not the selected executable")
++	}
++	downloadBody = []byte(strings.Repeat("x", len(body)))
++	if err := download(ctx, rel.Assets[name], filepath.Join(t.TempDir(), name)); err == nil {
++		t.Fatal("bad download passed the release checksum")
++	}
++	releaseDigest = ""
++	if _, err := Latest(ctx); err == nil {
++		t.Fatal("a release without a checksum was accepted")
++	}
++	releaseDigest, tag = digest, "v0.1.3909"
++	if _, err := Latest(ctx); err == nil {
++		t.Fatal("an official build could replace the custom build")
++	}
++}
