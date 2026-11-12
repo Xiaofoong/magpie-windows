@@ -97,21 +97,131 @@ index c93f1c9cc67fe0af673804d75e163d73f1012700..1c2519054ee48d16f035148763cbc31f
  /* ---------- modal ---------- */
  .modal {
 diff --git a/internal/gui/assets/app.js b/internal/gui/assets/app.js
-index dff131c8b8ec613289067696304b0a24fcbc9bb6..3844eb4f92069f80678c785e2428d303f81a4e9b 100644
+index dff131c8b8ec613289067696304b0a24fcbc9bb6..b980f9787cfdf0981ed29eb3f4d9d9944fdb82ad 100644
 --- a/internal/gui/assets/app.js
 +++ b/internal/gui/assets/app.js
-@@ -20145,7 +20145,9 @@ function renderSettings() {
+@@ -4343,6 +4343,13 @@ function updatePath(p) {
+   return p + (p.includes("?") ? "&" : "?") + "lang=" + encodeURIComponent(locale);
+ }
+ 
++// Format labels only; update state keeps the full build revision.
++function updateVersionText(version) {
++  return window.bootPrefs?.workbuddyReleaseChannel && typeof version === "string"
++    ? version.replace(/^(v?\d+\.\d+\.\d+)-workbuddy\.[1-9]\d*$/, "$1")
++    : version;
++}
++
+ // input: in use, so an update waits (inUseAt)
+ let usedAt = 0, usedOpen;
+ for (const k of "pointerdown keydown input wheel".split(" ")) addEventListener(k, () => {
+@@ -4407,7 +4414,7 @@ async function renderUpdateBadge() {
+   // click, not as "now"
+   if (u.state === "ready" && u.waiting) {
+     label.textContent = t("Waiting to update");
+-    const a = { v: u.latest, busy: updateBusyText(u.busy, u.using) || "…" };
++    const a = { v: updateVersionText(u.latest), busy: updateBusyText(u.busy, u.using) || "…" };
+     b.title = u.handover ? t("magpie restarts to update to {v} once the replies through a Claude subscription have finished: {busy}. Other requests carry on across the restart. Click to restart now.", a) : t("magpie restarts to update to {v} once the agents' requests through the gateway have finished: {busy}. Click to restart now.", a);
+     b.onclick = () => {
+       if (Date.now() - (+b.dataset.armed || 0) < 1500) return;
+@@ -4427,11 +4434,11 @@ async function renderUpdateBadge() {
+   }
+   // a swap that failed says so where it was clicked, not only in the tooltip
+   label.textContent = u.state === "ready" && u.error ? t("Update failed") : t("Update");
+-  b.title = u.state === "ready" ? t("Restart to update to {v}", { v: u.latest })
+-    : u.state === "error" ? t("Couldn't download {v}", { v: u.latest }) + " · " + t("Click to try again")
+-    : u.state === "found" ? t("{v} is out", { v: u.latest }) + (u.size ? " · " + t("{done} MB", { done: (u.size / 1e6).toFixed(1) }) : "") + " · " + t("Click to download and restart")
++  b.title = u.state === "ready" ? t("Restart to update to {v}", { v: updateVersionText(u.latest) })
++    : u.state === "error" ? t("Couldn't download {v}", { v: updateVersionText(u.latest) }) + " · " + t("Click to try again")
++    : u.state === "found" ? t("{v} is out", { v: updateVersionText(u.latest) }) + (u.size ? " · " + t("{done} MB", { done: (u.size / 1e6).toFixed(1) }) : "") + " · " + t("Click to download and restart")
+     : u.stuck ? updateStuck(u) + " " + t("Click to open the download page.")
+-    : t("{v} is out", { v: u.latest });
++    : t("{v} is out", { v: updateVersionText(u.latest) });
+   if (u.error) b.title += "\n" + u.error;
+   b.onclick = () => {
+     // what changed is shown first, and a click there restarts (#844); one
+@@ -5882,13 +5889,13 @@ function loadProviders() {
+ }
+ 
+ const rtView = (v) => v === "routing" || v === "groups";
+-async function loadProvidersNow() {
++async function loadProvidersNow(fresh = null) {
+   // The page's first opening (#1519, fatkun): a list is drawn at once, as
+   // the Agents page draws the last state, and the fresh one replaces it
+   // when it is in — the one read in the background after the start, else
+   // the one kept from the last read (this run's or the run before's). The
+   // read in the background still on its way is waited for, not asked again.
+-  let fresh = null, kept = null;
++  let kept = null;
+   if (!providers) {
+     const early = providersEarly;
+     providersEarly = null;
+@@ -5949,16 +5956,24 @@ async function loadProvidersNow() {
+ // the asking: this timer is what brings the lists in.
+ function providersWhileFetching() {
+   clearTimeout(providersWhileFetching.timer);
+-  if (!providers?.fetching) return;
++  // Retired subscriptions can move in the background while the first
++  // provider picker is open. Keep watching until they move or report an error.
++  const migrating = view === "providers" && providers?.unmoved?.some((p) => !p.error && !p.why && !unmovedSaid[p.id]?.why);
++  if (!providers?.fetching && !migrating) return;
+   providersWhileFetching.timer = setTimeout(async () => {
+-    if (!(view === "providers" || rtView(view) || providersPage(view)) || editing !== null || adding || document.hidden) return;
++    const idlePicker = () => migrating && view === "providers" && !presetQuery && !document.activeElement?.closest("#addSheet");
++    const canRead = () => (view === "providers" || rtView(view) || providersPage(view)) && editing === null &&
++      !importing && !importingApps && (!adding || idlePicker()) && !document.hidden;
++    if (!canRead()) return;
++    const shown = providers;
+     let next;
+     try { next = await api("providers"); } catch { providersWhileFetching(); return; }
++    if (providers !== shown || !canRead()) return;
+     const json = (p) => JSON.stringify({ ...p, fetching: false, gateway: { ...p.gateway, calls: 0 } });
+     if (json(next) !== json(providers)) {
+       // a reload that failed says nothing about the lists being in: it is
+       // asked again too, as loadProviders would have
+-      try { await loadProviders(); } catch { providersWhileFetching(); }
++      try { await loadProvidersNow(Promise.resolve(next)); } catch { providersWhileFetching(); }
+     }
+     else { providers.fetching = next.fetching; providersWhileFetching(); }
+   }, 2500);
+@@ -6472,7 +6487,7 @@ function unmovedLine(p) {
+   const said = unmovedSaid[p.id];
+   const why = said?.why || moveWhy(p, p);
+   body.append(el("div", "dep-head", t("{name}'s built-in subscription is retired, and its accounts haven't moved to its plugin yet", { name: p.name })),
+-    el("p", "dep-why", why ? t("Nothing serves them until they move: {error}", { error: why }) : t("Nothing serves them until they move. Moving keeps your accounts, models and agents as they are.")));
++    el("p", "dep-why", why ? t("Nothing serves them until they move: {error}", { error: why }) : t("Magpie found existing sign-ins on this computer. It moves them to the plugin in the background, then the account list updates here.")));
+   const acts = el("div", "dep-acts");
+   const b = el("button", "text action", said?.busy || (why ? t("Try again") : t("Move to the plugin")));
+   b.title = p.package; // the npm package: for the curious, not the sentence
+@@ -20109,7 +20124,7 @@ function renderSettings() {
+     about.append(r);
+     return r;
+   };
+-  renderUpdate(row(t("Version"), "", s.version));
++  renderUpdate(row(t("Version"), "", updateVersionText(s.version)));
+   // what changed in this version, and in one waiting; a build from source
+   // has no notes
+   if (/^v?\d+\.\d+\.\d+$/.test(s.version || "")) {
+@@ -20125,7 +20140,7 @@ function renderSettings() {
+   if (s.updateSkip && !s.noUpdatePill) {
+     api(updatePath("update")).then((u) => {
+       if (!pill.isConnected || !u || u.latest !== s.updateSkip) return;
+-      pill.querySelector(".sub").textContent = t("Hidden for {v} until a newer version is out", { v: u.latest });
++      pill.querySelector(".sub").textContent = t("Hidden for {v} until a newer version is out", { v: updateVersionText(u.latest) });
+       const back = el("button", "text", t("Show again"));
+       back.onclick = () => skipUpdate("");
+       pill.querySelector(".val").prepend(back);
+@@ -20145,7 +20160,9 @@ function renderSettings() {
    // out, or Stable, one a week and an urgent one at once, chosen by the
    // update feed. It holds for the version row's Check too, so it stays lit
    // with automatic updates off.
 -  row(t("Update channel"), s.updateChannel === "stable"
 +  if (window.bootPrefs?.workbuddyReleaseChannel) {
-+    row(t("Update channel"), "", t("Windows WorkBuddy releases")).classList.add("update-channel-row");
++    row(t("Update channel"), "", t("Magpie Windows releases")).classList.add("update-channel-row");
 +  } else row(t("Update channel"), s.updateChannel === "stable"
      ? t("One version a week, out for three days first, and urgent fixes at once. What's new lists every change since yours")
      : t("Every version as soon as it is out"), "",
      segs([["every", t("Every version")], ["stable", t("Stable")]], s.updateChannel === "stable" ? "stable" : "every",
-@@ -20159,7 +20161,7 @@ function renderSettings() {
+@@ -20159,7 +20176,7 @@ function renderSettings() {
      segsOO(!s.noAutoDownload, (v) => savePrefs({ ...keep, noAutoDownload: !v }))).classList.add("update-download-row");
    row(t("Restart automatically"), s.noAutoUpdate ? t("While automatic updates are on") : t("Once an update is downloaded, restarts into it without cutting off an agent's request"), "",
      segsOO(s.autoRestart, (v) => savePrefs({ ...keep, autoRestart: v }))).classList.add("update-restart-row", ...(s.noAutoUpdate ? ["off"] : []));
@@ -120,16 +230,93 @@ index dff131c8b8ec613289067696304b0a24fcbc9bb6..3844eb4f92069f80678c785e2428d303
    const open = el("button", "text", t("Open"));
    open.onclick = () => api("settings/reveal", {}).catch(statusErr);
    // portable (a data folder beside magpie, #508): everything is in there
+@@ -22497,7 +22514,7 @@ async function renderUpdate(r, u) {
+   };
+   switch (u.state) {
+     case "ready": {
+-      sub.textContent = t("{v} is downloaded", { v: u.latest }) + (u.error ? " · " + u.error : "");
++      sub.textContent = t("{v} is downloaded", { v: updateVersionText(u.latest) }) + (u.error ? " · " + u.error : "");
+       // a failed install says why, and offers the release page
+       sub.title = u.error || "";
+       if (u.error) sub.classList.add("wraps");
+@@ -22538,7 +22555,7 @@ async function renderUpdate(r, u) {
+     }
+     case "found": {
+       // downloads wait for a click (#2296): what is out, and its size
+-      sub.textContent = t("{v} is out", { v: u.latest }) + (u.size ? " · " + t("{done} MB", { done: (u.size / 1e6).toFixed(1) }) : "");
++      sub.textContent = t("{v} is out", { v: updateVersionText(u.latest) }) + (u.size ? " · " + t("{done} MB", { done: (u.size / 1e6).toFixed(1) }) : "");
+       const get = btn(t("Download update"), async () => {
+         if (updateBusy) return;
+         get.disabled = true;
+@@ -22551,7 +22568,7 @@ async function renderUpdate(r, u) {
+       break;
+     }
+     case "available":
+-      sub.textContent = t("{v} is out", { v: u.latest });
++      sub.textContent = t("{v} is out", { v: updateVersionText(u.latest) });
+       if (u.stuck) sub.textContent += " · " + updateStuck(u);
+       if (u.packaged) { sub.classList.add("wraps"); btn(t("Check"), check); break; }
+       btn(t("Download"), () => (web && u.url ? window.open(u.url, "_blank", "noopener") : api("update/install", {})));
+@@ -22559,11 +22576,11 @@ async function renderUpdate(r, u) {
+       break;
+     case "downloading":
+       if (UPDATE_STEPS[u.step] && u.step !== "retry") {
+-        sub.textContent = t("{v} is downloaded", { v: u.latest }) + " · " + t(UPDATE_STEPS[u.step]);
++        sub.textContent = t("{v} is downloaded", { v: updateVersionText(u.latest) }) + " · " + t(UPDATE_STEPS[u.step]);
+         again(700);
+         break;
+       }
+-      sub.textContent = t("Downloading {v}…", { v: u.latest });
++      sub.textContent = t("Downloading {v}…", { v: updateVersionText(u.latest) });
+       if (u.total) sub.textContent += " " + Math.floor(((u.done || 0) / u.total) * 100) + "% · " + t("{done} of {total} MB", { done: ((u.done || 0) / 1e6).toFixed(1), total: (u.total / 1e6).toFixed(1) });
+       else if (u.done) sub.textContent += " " + t("{done} MB", { done: (u.done / 1e6).toFixed(1) });
+       if (u.step === "retry") sub.textContent += " · " + t("Reconnecting…");
+@@ -22578,20 +22595,20 @@ async function renderUpdate(r, u) {
+       break;
+     case "latest":
+       // Stable's says the newest out (ylspcm on X)
+-      sub.textContent = u.newest ? t("Up to date on Stable · {v} is out on Every version", { v: u.newest }) : t(u.channel ? "Up to date on Stable" : "Up to date");
++      sub.textContent = u.newest ? t("Up to date on Stable · {v} is out on Every version", { v: updateVersionText(u.newest) }) : t(u.channel ? "Up to date on Stable" : "Up to date");
+       if (u.newest) btn(t("Switch to Every version"), () => savePrefs({ ...prefsKeep(prefs), updateChannel: "" }));
+       btn(t("Check"), check);
+       break;
+     case "error":
+       // the reason in sight: "timed out" says try a proxy, a 404 says wait
+-      sub.textContent = t(u.latest ? "Couldn't download {v}" : "Couldn't check for updates", { v: u.latest }) + (u.error ? " · " + u.error.replace(/^Get "[^"]*": /, "") : "");
++      sub.textContent = t(u.latest ? "Couldn't download {v}" : "Couldn't check for updates", { v: updateVersionText(u.latest) }) + (u.error ? " · " + u.error.replace(/^Get "[^"]*": /, "") : "");
+       // the network broke it off (AIMetaPhD on X): said in the app's words
+-      if (u.network && u.latest) sub.textContent = t("{v}'s download broke off, a network problem. Click Check to try again, or download it from the release page", { v: u.latest });
++      if (u.network && u.latest) sub.textContent = t("{v}'s download broke off, a network problem. Click Check to try again, or download it from the release page", { v: updateVersionText(u.latest) });
+       sub.title = u.error || "";
+       if (u.error) sub.classList.add("wraps");
+       // through a mirror (#893): the mirror's failing; GitHub is offered
+       if (u.mirror) {
+-        sub.textContent = t("Couldn't download {v} through the mirror {mirror}; it may be down or sent a file that doesn't match the release, which isn't installed", { v: u.latest, mirror: u.mirror })
++        sub.textContent = t("Couldn't download {v} through the mirror {mirror}; it may be down or sent a file that doesn't match the release, which isn't installed", { v: updateVersionText(u.latest), mirror: u.mirror })
+           + (u.error ? " · " + u.error.replace("through the mirror " + u.mirror + ": ", "").replace(/^Get "[^"]*": /, "") : "");
+         btn(t("Download from GitHub"), async () => {
+           if (updateBusy) return;
+@@ -22614,8 +22631,8 @@ async function renderUpdate(r, u) {
+       // the new version didn't start here (#894): why, and what to do
+       const b = u.blocked || {};
+       sub.textContent = b.policy
+-        ? t("{v} didn't start on this computer: Windows' Smart App Control (or another app control policy) blocked the new version, which isn't signed. magpie stays on {cur}. Download it and run it yourself, or turn Smart App Control off and check again", { v: u.latest || b.version, cur: u.current })
+-        : t("{v} didn't start on this computer, so magpie stays on {cur}", { v: u.latest || b.version, cur: u.current }) + (b.error ? " · " + b.error : "");
++        ? t("{v} didn't start on this computer: Windows' Smart App Control (or another app control policy) blocked the new version, which isn't signed. magpie stays on {cur}. Download it and run it yourself, or turn Smart App Control off and check again", { v: updateVersionText(u.latest || b.version), cur: updateVersionText(u.current) })
++        : t("{v} didn't start on this computer, so magpie stays on {cur}", { v: updateVersionText(u.latest || b.version), cur: updateVersionText(u.current) }) + (b.error ? " · " + b.error : "");
+       sub.title = b.error || u.error || "";
+       sub.classList.add("wraps");
+       if (u.url) btn(t("Download"), open);
 diff --git a/internal/gui/assets/i18n.js b/internal/gui/assets/i18n.js
-index 3fea31ac9f088209acb72e1cf90b4dc1548663a8..69dc8f085932b88dcc21e37d99533ea7e2a69fda 100644
+index 3fea31ac9f088209acb72e1cf90b4dc1548663a8..1b87839731a0bdccad1d4f2acc437a75f3a16247 100644
 --- a/internal/gui/assets/i18n.js
 +++ b/internal/gui/assets/i18n.js
 @@ -4,6 +4,72 @@
  // works. {name} slots are filled by t(str, vars).
  const I18N = {
    zh: {
-+    "No Windows WorkBuddy update has been published yet.": "Windows WorkBuddy 更新渠道暂未发布版本。",
-+    "Windows WorkBuddy releases": "Windows WorkBuddy 定制版",
++    "Magpie found existing sign-ins on this computer. It moves them to the plugin in the background, then the account list updates here.": "Magpie 检测到这台电脑上已有登录记录。后台迁移到插件后，账号列表会自动刷新。",
++    "Magpie Windows releases": "Magpie Windows",
 +    "Could not write the export in the selected folder.": "无法在所选文件夹保存导出文件。",
 +    "Could not open the folder picker.": "无法打开文件夹选择器。",
 +    "Open the desktop app to export accounts.": "请在桌面应用中导出账号。",
@@ -197,6 +384,33 @@ index 3fea31ac9f088209acb72e1cf90b4dc1548663a8..69dc8f085932b88dcc21e37d99533ea7
      "Cards": "卡片",
      "Table": "表格",
      "Quick check": "快速检测",
+@@ -5142,6 +5208,8 @@ const I18N = {
+     "This report is no longer kept: magpie keeps the last 5.": "这份报告已经不在了：magpie 只保留最近 5 份。",
+   },
+   "zh-TW": {
++    "Magpie found existing sign-ins on this computer. It moves them to the plugin in the background, then the account list updates here.": "Magpie 偵測到這台電腦已有登入紀錄。背景移轉至外掛後，帳號清單會自動更新。",
++    "Magpie Windows releases": "Magpie Windows",
+     "Cards": "卡片",
+     "Table": "表格",
+     "Quick check": "快速檢測",
+@@ -10265,6 +10333,8 @@ const I18N = {
+     "This report is no longer kept: magpie keeps the last 5.": "這份報告已經不在了：magpie 只保留最近 5 份。",
+   },
+   ja: {
++    "Magpie found existing sign-ins on this computer. It moves them to the plugin in the background, then the account list updates here.": "このコンピューターに保存されたログイン情報が見つかりました。バックグラウンドでプラグインへ移行した後、アカウント一覧が更新されます。",
++    "Magpie Windows releases": "Magpie Windows リリース",
+     "Cards": "カード",
+     "Table": "表",
+     "Quick check": "クイックチェック",
+@@ -15390,6 +15460,8 @@ const I18N = {
+     "This report is no longer kept: magpie keeps the last 5.": "このレポートはもう残っていません。magpie は最新の 5 件だけを保存します。",
+   },
+   de: {
++    "Magpie found existing sign-ins on this computer. It moves them to the plugin in the background, then the account list updates here.": "Magpie hat vorhandene Anmeldungen auf diesem Computer gefunden. Nach der Migration zum Plugin im Hintergrund wird die Kontoliste hier aktualisiert.",
++    "Magpie Windows releases": "Magpie-Windows-Versionen",
+     "Cards": "Karten",
+     "Table": "Tabelle",
+     "Quick check": "Schnelltest",
 diff --git a/internal/gui/assets/index.html b/internal/gui/assets/index.html
 index 157fc1b9a115968e34198974d9ebe6893ac5fa2a..0d4d977fe17869ce856466ea9946aacf75de87ec 100644
 --- a/internal/gui/assets/index.html
@@ -221,6 +435,97 @@ index 157fc1b9a115968e34198974d9ebe6893ac5fa2a..0d4d977fe17869ce856466ea9946aacf
  <script src="plugins.js"></script>
  <script src="pluginpages.js"></script>
  <script src="context.js"></script>
+diff --git a/internal/gui/assets/whatsnew.js b/internal/gui/assets/whatsnew.js
+index 57606c4edd06427903348a9ebe886d9108d2d69e..17a2554afa9f9e0b5792d3e01714e3468fbd11ed 100644
+--- a/internal/gui/assets/whatsnew.js
++++ b/internal/gui/assets/whatsnew.js
+@@ -1,6 +1,10 @@
+ // The release notes' dialogs: What's new (after an update, and Settings'
+ // row) and the ask before an update is put in. app.js imports this when
+ // one opens (notesJS), so it weighs nothing on the core.
++function noteVersion(v) {
++  return "v" + (updateVersionText(v) || "").replace(/^v/, "");
++}
++
+ // wnRange is Settings' pick of which notes (Linka): since the last update,
+ // or this version and 10, 20, 50 or 100 before it
+ function wnRange(last) {
+@@ -25,7 +29,7 @@ function wnRange(last) {
+ function showWhatsNew(releases, auto, more = {}) {
+   const ed = el("div", "editor whatsnew");
+   const head = el("div", "ehead");
+-  head.append(el("b", "", t("What's new in {v}", { v: "v" + (releases[0]?.version || more.current) })));
++  head.append(el("b", "", t("What's new in {v}", { v: noteVersion(releases[0]?.version || more.current) })));
+   if (!auto) head.append(el("span", "grow"), wnRange(more.last || ""));
+   ed.append(head);
+   if (releases.length > 1) {
+@@ -33,7 +37,7 @@ function showWhatsNew(releases, auto, more = {}) {
+     const wait = releases.filter((r) => r.pending);
+     if (wait.length) {
+       const h = el("div", "wn-ver");
+-      h.append(el("b", "", "v" + wait.at(-1).version + (wait.length > 1 ? " – v" + wait[0].version : "")), el("span", "badge", t("Not installed yet")));
++      h.append(el("b", "", noteVersion(wait.at(-1).version) + (wait.length > 1 ? " – " + noteVersion(wait[0].version) : "")), el("span", "badge", t("Not installed yet")));
+       sec.append(h);
+     }
+     sec.append(mergedNotes(releases, more.total));
+@@ -42,7 +46,7 @@ function showWhatsNew(releases, auto, more = {}) {
+   else for (const r of releases) {
+     const sec = el("section", "wn-rel");
+     const h = el("div", "wn-ver");
+-    h.append(el("b", "", "v" + r.version));
++    h.append(el("b", "", noteVersion(r.version)));
+     if (r.pending) h.append(el("span", "badge", t("Not installed yet")));
+     sec.append(h, noteBlocks(r.notes));
+     ed.append(sec);
+@@ -50,7 +54,7 @@ function showWhatsNew(releases, auto, more = {}) {
+   if (more.failed || !releases.length) {
+     const sec = el("section", "wn-rel wn-none" + (more.failed ? " wn-failed" : ""));
+     const h = el("div", "wn-ver");
+-    if (more.current) h.append(el("b", "", "v" + more.current));
++    if (more.current) h.append(el("b", "", noteVersion(more.current)));
+     const p = el("p", "wn-msg", more.failed ? t("Couldn't load the release notes") : t("No release notes provided."));
+     const acts = el("div", "wn-acts");
+     if (more.failed && more.retry) {
+@@ -149,8 +153,8 @@ function mergedNotes(releases, total = 0) {
+   const box = el("div", "wn-notes wn-merged");
+   const vs = releases.map((r) => r.version);
+   const span = total > vs.length
+-    ? t("{n} releases · the newest {m} shown, {from} – {to}", { n: total, m: vs.length, from: "v" + vs.at(-1), to: "v" + vs[0] })
+-    : t("{n} releases · {from} – {to}", { n: vs.length, from: "v" + vs.at(-1), to: "v" + vs[0] });
++    ? t("{n} releases · the newest {m} shown, {from} – {to}", { n: total, m: vs.length, from: noteVersion(vs.at(-1)), to: noteVersion(vs[0]) })
++    : t("{n} releases · {from} – {to}", { n: vs.length, from: noteVersion(vs.at(-1)), to: noteVersion(vs[0]) });
+   box.append(el("div", "wn-span", span));
+   for (const [k, items] of [...secs].filter(([, x]) => x.length).sort((a, b) => rank(a[0]) - rank(b[0]))) {
+     const h = el("div", "wn-h wn-h2");
+@@ -158,7 +162,7 @@ function mergedNotes(releases, total = 0) {
+     const list = el("ul");
+     for (const it of items) {
+       const e = inlineMD(el("li"), it.text);
+-      e.append(el("span", "wn-v", "v" + it.v));
++      e.append(el("span", "wn-v", noteVersion(it.v)));
+       list.append(e);
+     }
+     box.append(h, list);
+@@ -225,8 +229,8 @@ async function confirmUpdate(u, go, b) {
+   const releases = w?.releases?.length ? w.releases : u.notes ? [{ version: u.latest, notes: u.notes }] : [];
+   const ed = el("div", "editor whatsnew update-ask");
+   const head = el("div", "ehead");
+-  head.append(el("b", "", t("Update to {v}", { v: "v" + (w?.latest || u.latest) })));
+-  if (u.current) head.append(el("span", "wn-since", t("What changed since {v}", { v: "v" + u.current })));
++  head.append(el("b", "", t("Update to {v}", { v: noteVersion(w?.latest || u.latest) })));
++  if (u.current) head.append(el("span", "wn-since", t("What changed since {v}", { v: noteVersion(u.current) })));
+   const box = el("div", "wn-list");
+   if (releases.length > 1) {
+     const sec = el("section", "wn-rel");
+@@ -236,7 +240,7 @@ async function confirmUpdate(u, go, b) {
+   else for (const r of releases) {
+     const sec = el("section", "wn-rel");
+     const h = el("div", "wn-ver");
+-    h.append(el("b", "", "v" + r.version));
++    h.append(el("b", "", noteVersion(r.version)));
+     sec.append(h, noteBlocks(r.notes));
+     box.append(sec);
+   }
 diff --git a/internal/gui/assets/workbuddy-export.js b/internal/gui/assets/workbuddy-export.js
 new file mode 100644
 index 0000000000000000000000000000000000000000..6118a61b303dea90f9b9b041fd7304da0a8e0a24
@@ -1559,7 +1864,7 @@ index 288c036ff960546e435aeb16ff3953cdffcfa0e7..6c78c6963e49ec769ede67ccb2d01c9e
  	}
 diff --git a/internal/update/workbuddy.go b/internal/update/workbuddy.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..22753c1b7d35cf29d0c30425e34b266eb2cf8fe1
+index 0000000000000000000000000000000000000000..1c232694c0b7fcc123056f862c83c962df872200
 --- /dev/null
 +++ b/internal/update/workbuddy.go
 @@ -0,0 +1,92 @@
@@ -1612,10 +1917,10 @@ index 0000000000000000000000000000000000000000..22753c1b7d35cf29d0c30425e34b266e
 +	}
 +	defer res.Body.Close()
 +	if res.StatusCode == http.StatusNotFound {
-+		return nil, errors.New("No Windows WorkBuddy update has been published yet.")
++		return nil, errors.New("no Magpie Windows update has been published yet")
 +	}
 +	if res.StatusCode != http.StatusOK {
-+		return nil, fmt.Errorf("WorkBuddy update channel: %s", res.Status)
++		return nil, fmt.Errorf("Magpie Windows update channel: %s", res.Status)
 +	}
 +	var gh struct {
 +		Tag        string `json:"tag_name"`
@@ -1631,10 +1936,10 @@ index 0000000000000000000000000000000000000000..22753c1b7d35cf29d0c30425e34b266e
 +		} `json:"assets"`
 +	}
 +	if err := json.NewDecoder(io.LimitReader(res.Body, 2<<20)).Decode(&gh); err != nil {
-+		return nil, fmt.Errorf("WorkBuddy update metadata: %w", err)
++		return nil, fmt.Errorf("Magpie Windows update metadata: %w", err)
 +	}
 +	if gh.Draft || gh.Prerelease || !workBuddyVersion.MatchString(gh.Tag) || parse(gh.Tag) == nil {
-+		return nil, errors.New("invalid Windows WorkBuddy release")
++		return nil, errors.New("invalid Magpie Windows release")
 +	}
 +	name := "magpie-windows-" + arch() + ".exe"
 +	for _, a := range gh.Assets {
@@ -1644,7 +1949,7 @@ index 0000000000000000000000000000000000000000..22753c1b7d35cf29d0c30425e34b266e
 +		hash, ok := strings.CutPrefix(a.Digest, "sha256:")
 +		checksum, err := hex.DecodeString(hash)
 +		if !ok || err != nil || len(checksum) != sha256.Size {
-+			return nil, errors.New("WorkBuddy update is missing a valid SHA-256 checksum")
++			return nil, errors.New("Magpie Windows update is missing a valid SHA-256 checksum")
 +		}
 +		u := githubWeb + "/" + workBuddyReleaseRepo + "/releases/download/" + gh.Tag + "/" + name
 +		asset := Asset{URL: u, GitHub: u, API: fmt.Sprintf("%s/releases/assets/%d", repoAPI, a.ID), Size: a.Size, SHA256: hash}
@@ -1653,7 +1958,7 @@ index 0000000000000000000000000000000000000000..22753c1b7d35cf29d0c30425e34b266e
 +			URL: workBuddyReleasePage(gh.Tag), Assets: map[string]Asset{name: asset},
 +		}, nil
 +	}
-+	return nil, fmt.Errorf("WorkBuddy update has no %s", name)
++	return nil, fmt.Errorf("Magpie Windows update has no %s", name)
 +}
 diff --git a/internal/update/workbuddy_test.go b/internal/update/workbuddy_test.go
 new file mode 100644
