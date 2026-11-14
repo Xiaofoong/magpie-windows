@@ -48,17 +48,25 @@ jobs:
         env:
           CORE: ${{ needs.check.outputs.core }}
         run: |
-          git clone --depth 1 --branch "$CORE" https://github.com/yetone/magpie.git upstream
-          git -C upstream fetch --no-tags --depth 1 origin refs/tags/v0.1.3908
+          python3 release.py retry git clone --depth 1 --branch "$CORE" https://github.com/yetone/magpie.git upstream
+          python3 release.py retry git -C upstream fetch --no-tags --depth 1 origin refs/tags/v0.1.3908
           git -C upstream apply --3way ../workbuddy.patch
           git -C upstream diff --cached --check
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version-file: upstream/go.mod
           cache-dependency-path: upstream/go.sum
+      - name: Download Go dependencies
+        working-directory: upstream
+        run: python3 ../release.py retry go mod download
       - name: Test desktop account transfer and update verification
         working-directory: upstream
-        run: go test -tags nogui ./internal/gui ./internal/update ./internal/cli -run 'Test(WorkBuddy(Import|Export|Update|Executable)|ImportPreviewIsReadOnlyCommitKeepsDuplicates|EveryRouteHasACommandOrIsNamed)' -count=1
+        run: >-
+          go test -tags nogui ./internal/gui ./internal/plugin ./internal/update
+          -run '^Test(WorkBuddy(Import|Export|Update|Executable).*|FlatAndDomesticFormats|Import(FormatsAndTimeUnits|RejectsMismatchAndUntrustedDomain|PreviewIsReadOnlyCommitKeepsDuplicates|PartialFailureDoesNotLeakOrLoseOthers|NewUIDKeepsExistingSignIn))$'
+          -count=1
+      - name: Check CLI route parity against upstream
+        run: python3 release.py check-parity upstream
       - name: Build the Windows editions
         working-directory: upstream
         env:
@@ -98,7 +106,7 @@ jobs:
           TAG: ${{ needs.check.outputs.tag }}
           CORE: ${{ needs.check.outputs.core }}
         run: |
-          gh api "repos/$REPO/releases?per_page=100" > releases.json
+          python3 release.py retry gh api "repos/$REPO/releases?per_page=100" > releases.json
           existing=$(jq -r --arg tag "$TAG" '[.[] | select(.tag_name == $tag)] | first | if . == null then "absent" elif .draft then "draft" else "published" end' releases.json)
           case "$existing" in
             absent)
@@ -109,6 +117,6 @@ jobs:
             *) exit 1 ;;
           esac
           (cd dist && sha256sum --check SHA256SUMS.txt)
-          gh release upload "$TAG" dist/* --repo "$REPO" --clobber
+          python3 release.py retry gh release upload "$TAG" dist/* --repo "$REPO" --clobber
           python3 release.py verify "$REPO" "$TAG" dist
           gh release edit "$TAG" --repo "$REPO" --draft=false --latest --title "Magpie Windows $CORE"

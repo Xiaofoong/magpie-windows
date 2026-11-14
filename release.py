@@ -8,6 +8,8 @@ import re
 import struct
 import subprocess
 import sys
+import tempfile
+import time
 import zipfile
 
 ROOT = Path(__file__).resolve().parent
@@ -17,11 +19,77 @@ UPSTREAM = "yetone/magpie-releases"
 CUSTOM = re.compile(r"v(\d+)\.(\d+)\.(\d+)-workbuddy\.([1-9]\d*)")
 STABLE = re.compile(r"v(\d+)\.(\d+)\.(\d+)")
 ARCHES = {"amd64": ("x64", 0x8664), "arm64": ("ARM64", 0xAA64)}
+PARITY_TEST = "TestEveryRouteHasACommandOrIsNamed"
+CLI_PACKAGE = "github.com/yetone/magpie/internal/cli"
+MISSING_ROUTE = re.compile(
+    r"\s*settings_parity_test\.go:\d+: ([A-Z]+ /api/\S+) has no command: "
+    r"name the one that does what it does in cliForRoute, or say why there's none yet in notYet\s*"
+)
+
+
+def retry(command, **kwargs):
+    for delay in (5, 15, None):
+        try:
+            return subprocess.run(command, check=True, **kwargs)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            if delay is None:
+                raise
+            print(f"{error}; retrying in {delay}s", file=sys.stderr, flush=True)
+            time.sleep(delay)
 
 
 def gh_api(endpoint):
-    result = subprocess.check_output(["gh", "api", endpoint], text=True)
-    return json.loads(result)
+    result = retry(["gh", "api", endpoint], stdout=subprocess.PIPE, text=True, timeout=120)
+    return json.loads(result.stdout)
+
+
+def parity(source):
+    command = ["go", "test", "-json", "-tags", "nogui", "./internal/cli",
+               "-run", f"^{PARITY_TEST}$", "-count=1"]
+    result = subprocess.run(command, cwd=source, stdout=subprocess.PIPE, text=True)
+    missing = set()
+    unexpected = []
+    ran = False
+    failed = False
+    for line in result.stdout.splitlines():
+        event = json.loads(line)
+        output = event.get("Output", "")
+        print(output, end="", flush=True)
+        if event.get("Action") == "build-fail" or event.get("FailedBuild"):
+            unexpected.append(event)
+        if event.get("Package") != CLI_PACKAGE or event.get("Test") != PARITY_TEST:
+            continue
+        ran |= event["Action"] == "run"
+        failed |= event["Action"] == "fail"
+        if output and not output.startswith((f"=== RUN   {PARITY_TEST}\n", f"--- FAIL: {PARITY_TEST} (")):
+            route = MISSING_ROUTE.fullmatch(output)
+            if route:
+                missing.add(route[1])
+            else:
+                unexpected.append(event)
+    if result.returncode == 0 and ran:
+        return set()
+    if result.returncode == 1 and ran and failed and missing and not unexpected:
+        return missing
+    raise ValueError(f"Could not isolate missing route registrations in {source}")
+
+
+def check_parity(source):
+    patched_missing = parity(source)
+    if not patched_missing:
+        return
+    print("Comparing route parity with the untouched upstream commit.", flush=True)
+    with tempfile.TemporaryDirectory(prefix="magpie-upstream-") as temp:
+        clean = Path(temp) / "source"
+        subprocess.run(["git", "-C", source, "worktree", "add", "--detach", clean, "HEAD"], check=True)
+        try:
+            upstream_missing = parity(clean)
+        finally:
+            subprocess.run(["git", "-C", source, "worktree", "remove", clean], check=True)
+    new_missing = patched_missing - upstream_missing
+    if new_missing:
+        raise ValueError(f"Windows patch introduced missing route registrations: {', '.join(sorted(new_missing))}")
+    print("::warning::Missing route registrations reproduced in upstream: " + ", ".join(sorted(patched_missing)))
 
 
 def version(tag, pattern):
@@ -136,6 +204,10 @@ def main():
     command, *args = sys.argv[1:]
     if command == "plan":
         plan(*args)
+    elif command == "retry":
+        retry(args)
+    elif command == "check-parity":
+        check_parity(Path(args[0]).resolve())
     elif command == "package":
         source, target, tag, repo = args
         package(Path(source), Path(target), tag, repo)
