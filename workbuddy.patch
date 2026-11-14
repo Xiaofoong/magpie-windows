@@ -307,112 +307,8 @@ index dff131c8b8ec613289067696304b0a24fcbc9bb6..b980f9787cfdf0981ed29eb3f4d9d994
        sub.title = b.error || u.error || "";
        sub.classList.add("wraps");
        if (u.url) btn(t("Download"), open);
-diff --git a/internal/gui/assets/i18n.js b/internal/gui/assets/i18n.js
-index 3fea31ac9f088209acb72e1cf90b4dc1548663a8..1b87839731a0bdccad1d4f2acc437a75f3a16247 100644
---- a/internal/gui/assets/i18n.js
-+++ b/internal/gui/assets/i18n.js
-@@ -4,6 +4,72 @@
- // works. {name} slots are filled by t(str, vars).
- const I18N = {
-   zh: {
-+    "Magpie found existing sign-ins on this computer. It moves them to the plugin in the background, then the account list updates here.": "Magpie 检测到这台电脑上已有登录记录。后台迁移到插件后，账号列表会自动刷新。",
-+    "Magpie Windows releases": "Magpie Windows",
-+    "Could not write the export in the selected folder.": "无法在所选文件夹保存导出文件。",
-+    "Could not open the folder picker.": "无法打开文件夹选择器。",
-+    "Open the desktop app to export accounts.": "请在桌面应用中导出账号。",
-+    "Export saved to {path}": "已保存到 {path}",
-+    "Saving accounts…": "正在保存账号…",
-+    "Reading accounts…": "正在读取账号…",
-+    "No WorkBuddy accounts are available to export.": "没有可导出的 WorkBuddy 账号。",
-+    "Clear selection": "取消全选",
-+    "Select all accounts": "全选账号",
-+    "Choose folder and export": "选择文件夹并导出",
-+    "Keep this JSON private. It contains the selected accounts’ sign-in credentials.": "请妥善保管此 JSON 文件，其中包含所选账号的登录凭证。",
-+    "Select the accounts to export, then choose where to save the JSON.": "选好账号后，选择保存 JSON 的位置。",
-+    "Export WorkBuddy accounts": "导出 WorkBuddy 账号",
-+    "The export is too large. Select fewer accounts.": "导出内容过大，请减少选择的账号后分批导出",
-+    "The account data is incomplete and cannot be exported.": "账号凭证格式不完整，无法导出",
-+    "The selected account changed or cannot be exported. Reopen the export list.": "所选账号已变化或不支持导出，请刷新账号列表",
-+    "Select 1 to 200 exportable accounts.": "请选择 1 至 200 个可导出的账号",
-+    "API keys and linked desktop sign-ins cannot be exported as accounts.": "此项是 API Key 或桌面登录引用，无法导出为账号登录文件",
-+    "Available to export": "导出当前保存在本机的登录凭证",
-+    "WorkBuddy account": "WorkBuddy 账号",
-+    "Unsupported WorkBuddy / CodeBuddy account format.": "不是支持的 WorkBuddy / CodeBuddy 账号格式",
-+    "Unknown account region.": "无法识别账号地区",
-+    "Account type and region do not match.": "账号类型与地区不一致",
-+    "Invalid account domain.": "账号域名无效",
-+    "Unsupported account domain.": "账号域名不在支持范围内",
-+    "Account region and domain do not match.": "账号地区与域名不一致",
-+    "Account type and domain do not match.": "账号类型与域名不一致",
-+    "The account needs a recognized region or domain.": "缺少可识别的账号地区或域名",
-+    "The file exceeds 1 MB.": "文件超过 1 MB",
-+    "Invalid JSON. Select the original export file.": "JSON 格式错误，请选择原始导出文件",
-+    "An account field has an invalid type.": "账号字段类型不正确",
-+    "The file must contain an account object or an array.": "文件必须是账号对象或账号数组",
-+    "The accounts field must be an array.": "accounts 必须是账号数组",
-+    "Select a file with 1 to 200 accounts.": "请选择含 1 至 200 个账号的文件",
-+    "Account UIDs do not match.": "账号 UID 不一致",
-+    "A valid account UID is required.": "缺少有效的账号 UID",
-+    "A valid access token is required.": "缺少有效的访问令牌",
-+    "The region and edition do not match.": "region 与 edition 地区标记不一致",
-+    "Invalid enterprise ID.": "企业标识无效",
-+    "Invalid expiration time.": "有效期字段无效",
-+    "Could not read saved accounts. Import stopped.": "已有账号文件无法读取，已停止导入以保护原账号",
-+    "Saved account data is invalid. Import stopped.": "已有账号文件损坏，已停止导入以保护原账号",
-+    "No expiration time. Sign in again from Providers.": "文件缺少可确认的授权到期时间，请在供应商页面重新登录",
-+    "Authorization expired. Sign in again from Providers.": "文件里的授权已过期，请在供应商页面重新登录",
-+    "WorkBuddy (China)": "WorkBuddy（国内）",
-+    "WorkBuddy AI (International)": "WorkBuddy AI（国际）",
-+    "Duplicate account. The existing sign-in will be kept.": "重复账号，将跳过并保留已有登录",
-+    "Ready to import. Sign in again when authorization expires.": "可导入当前授权，到期后请重新登录",
-+    "Could not read the import request.": "无法读取导入请求",
-+    "Enable subscription accounts in Magpie privacy settings first.": "请先在 Magpie 隐私设置开启订阅账号功能",
-+    "Could not save the account. Check the plugin and try again.": "此账号未能保存，请检查插件运行状态后重试",
-+    "Duplicate account. The existing sign-in was kept.": "重复账号，已保留已有登录",
-+    "Imported. Sign in again from Providers when authorization expires.": "已导入当前授权，到期或失效后请在供应商页面重新登录",
-+    "Could not prepare the WorkBuddy plugin. Check the network and plugin and try again.": "无法准备 WorkBuddy 插件，请检查网络或插件状态后重试",
-+    "The WorkBuddy community plugin is unavailable.": "WorkBuddy 社区插件尚未就绪",
-+    "Import WorkBuddy accounts": "导入 WorkBuddy 账号",
-+    "Choose a WorkBuddy or CodeBuddy JSON export to preview its accounts.": "选择 WorkBuddy 或 CodeBuddy 的 JSON 导出文件以预览账号。",
-+    "Choose JSON file": "选择 JSON 文件",
-+    "Import selected file": "确认导入",
-+    "Reading file…": "正在读取文件…",
-+    "Importing accounts…": "正在导入账号…",
-+    "Could not read the selected file.": "无法读取所选文件。",
-+    "Account {n}": "账号 {n}",
-+    "Could not import accounts. Try again.": "无法导入账号，请重试。",
-     "Cards": "卡片",
-     "Table": "表格",
-     "Quick check": "快速检测",
-@@ -5142,6 +5208,8 @@ const I18N = {
-     "This report is no longer kept: magpie keeps the last 5.": "这份报告已经不在了：magpie 只保留最近 5 份。",
-   },
-   "zh-TW": {
-+    "Magpie found existing sign-ins on this computer. It moves them to the plugin in the background, then the account list updates here.": "Magpie 偵測到這台電腦已有登入紀錄。背景移轉至外掛後，帳號清單會自動更新。",
-+    "Magpie Windows releases": "Magpie Windows",
-     "Cards": "卡片",
-     "Table": "表格",
-     "Quick check": "快速檢測",
-@@ -10265,6 +10333,8 @@ const I18N = {
-     "This report is no longer kept: magpie keeps the last 5.": "這份報告已經不在了：magpie 只保留最近 5 份。",
-   },
-   ja: {
-+    "Magpie found existing sign-ins on this computer. It moves them to the plugin in the background, then the account list updates here.": "このコンピューターに保存されたログイン情報が見つかりました。バックグラウンドでプラグインへ移行した後、アカウント一覧が更新されます。",
-+    "Magpie Windows releases": "Magpie Windows リリース",
-     "Cards": "カード",
-     "Table": "表",
-     "Quick check": "クイックチェック",
-@@ -15390,6 +15460,8 @@ const I18N = {
-     "This report is no longer kept: magpie keeps the last 5.": "このレポートはもう残っていません。magpie は最新の 5 件だけを保存します。",
-   },
-   de: {
-+    "Magpie found existing sign-ins on this computer. It moves them to the plugin in the background, then the account list updates here.": "Magpie hat vorhandene Anmeldungen auf diesem Computer gefunden. Nach der Migration zum Plugin im Hintergrund wird die Kontoliste hier aktualisiert.",
-+    "Magpie Windows releases": "Magpie-Windows-Versionen",
-     "Cards": "Karten",
-     "Table": "Tabelle",
-     "Quick check": "Schnelltest",
 diff --git a/internal/gui/assets/index.html b/internal/gui/assets/index.html
-index 157fc1b9a115968e34198974d9ebe6893ac5fa2a..0d4d977fe17869ce856466ea9946aacf75de87ec 100644
+index 157fc1b9a115968e34198974d9ebe6893ac5fa2a..6160d7dfd37e46dd85ca483bc0718c43650c8bf6 100644
 --- a/internal/gui/assets/index.html
 +++ b/internal/gui/assets/index.html
 @@ -140,6 +140,10 @@
@@ -426,7 +322,15 @@ index 157fc1b9a115968e34198974d9ebe6893ac5fa2a..0d4d977fe17869ce856466ea9946aacf
    <div class="after-list">
      <button class="text" id="addProvider" data-t>＋ Add provider</button>
    </div>
-@@ -611,6 +615,8 @@
+@@ -594,6 +598,7 @@
+   </div>
+ </div>
+ <script src="i18n.js"></script>
++<script src="workbuddy-i18n.js"></script>
+ <script src="kernel.js"></script>
+ <!-- the built-in plugins' own scripts (pluginrt.Manifest.Client) -->
+ <script src="plugins/gateway/keys.js"></script>
+@@ -611,6 +616,8 @@
  <script src="plugins/otel/i18n.js"></script>
  <script src="purposes.js"></script>
  <script src="app.js"></script>
@@ -627,6 +531,93 @@ index 0000000000000000000000000000000000000000..6118a61b303dea90f9b9b041fd7304da
 +    }
 +  };
 +})();
+diff --git a/internal/gui/assets/workbuddy-i18n.js b/internal/gui/assets/workbuddy-i18n.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..9730cb26273c39d14dfa2f884cfa4fa5f00f9c6a
+--- /dev/null
++++ b/internal/gui/assets/workbuddy-i18n.js
+@@ -0,0 +1,81 @@
++// Keep the Windows edition strings independent of the upstream translation table.
++Object.assign(I18N["zh"], {
++  "Magpie found existing sign-ins on this computer. It moves them to the plugin in the background, then the account list updates here.": "Magpie 检测到这台电脑上已有登录记录。后台迁移到插件后，账号列表会自动刷新。",
++  "Magpie Windows releases": "Magpie Windows",
++  "Could not write the export in the selected folder.": "无法在所选文件夹保存导出文件。",
++  "Could not open the folder picker.": "无法打开文件夹选择器。",
++  "Open the desktop app to export accounts.": "请在桌面应用中导出账号。",
++  "Export saved to {path}": "已保存到 {path}",
++  "Saving accounts…": "正在保存账号…",
++  "Reading accounts…": "正在读取账号…",
++  "No WorkBuddy accounts are available to export.": "没有可导出的 WorkBuddy 账号。",
++  "Clear selection": "取消全选",
++  "Select all accounts": "全选账号",
++  "Choose folder and export": "选择文件夹并导出",
++  "Keep this JSON private. It contains the selected accounts’ sign-in credentials.": "请妥善保管此 JSON 文件，其中包含所选账号的登录凭证。",
++  "Select the accounts to export, then choose where to save the JSON.": "选好账号后，选择保存 JSON 的位置。",
++  "Export WorkBuddy accounts": "导出 WorkBuddy 账号",
++  "The export is too large. Select fewer accounts.": "导出内容过大，请减少选择的账号后分批导出",
++  "The account data is incomplete and cannot be exported.": "账号凭证格式不完整，无法导出",
++  "The selected account changed or cannot be exported. Reopen the export list.": "所选账号已变化或不支持导出，请刷新账号列表",
++  "Select 1 to 200 exportable accounts.": "请选择 1 至 200 个可导出的账号",
++  "API keys and linked desktop sign-ins cannot be exported as accounts.": "此项是 API Key 或桌面登录引用，无法导出为账号登录文件",
++  "Available to export": "导出当前保存在本机的登录凭证",
++  "WorkBuddy account": "WorkBuddy 账号",
++  "Unsupported WorkBuddy / CodeBuddy account format.": "不是支持的 WorkBuddy / CodeBuddy 账号格式",
++  "Unknown account region.": "无法识别账号地区",
++  "Account type and region do not match.": "账号类型与地区不一致",
++  "Invalid account domain.": "账号域名无效",
++  "Unsupported account domain.": "账号域名不在支持范围内",
++  "Account region and domain do not match.": "账号地区与域名不一致",
++  "Account type and domain do not match.": "账号类型与域名不一致",
++  "The account needs a recognized region or domain.": "缺少可识别的账号地区或域名",
++  "The file exceeds 1 MB.": "文件超过 1 MB",
++  "Invalid JSON. Select the original export file.": "JSON 格式错误，请选择原始导出文件",
++  "An account field has an invalid type.": "账号字段类型不正确",
++  "The file must contain an account object or an array.": "文件必须是账号对象或账号数组",
++  "The accounts field must be an array.": "accounts 必须是账号数组",
++  "Select a file with 1 to 200 accounts.": "请选择含 1 至 200 个账号的文件",
++  "Account UIDs do not match.": "账号 UID 不一致",
++  "A valid account UID is required.": "缺少有效的账号 UID",
++  "A valid access token is required.": "缺少有效的访问令牌",
++  "The region and edition do not match.": "region 与 edition 地区标记不一致",
++  "Invalid enterprise ID.": "企业标识无效",
++  "Invalid expiration time.": "有效期字段无效",
++  "Could not read saved accounts. Import stopped.": "已有账号文件无法读取，已停止导入以保护原账号",
++  "Saved account data is invalid. Import stopped.": "已有账号文件损坏，已停止导入以保护原账号",
++  "No expiration time. Sign in again from Providers.": "文件缺少可确认的授权到期时间，请在供应商页面重新登录",
++  "Authorization expired. Sign in again from Providers.": "文件里的授权已过期，请在供应商页面重新登录",
++  "WorkBuddy (China)": "WorkBuddy（国内）",
++  "WorkBuddy AI (International)": "WorkBuddy AI（国际）",
++  "Duplicate account. The existing sign-in will be kept.": "重复账号，将跳过并保留已有登录",
++  "Ready to import. Sign in again when authorization expires.": "可导入当前授权，到期后请重新登录",
++  "Could not read the import request.": "无法读取导入请求",
++  "Enable subscription accounts in Magpie privacy settings first.": "请先在 Magpie 隐私设置开启订阅账号功能",
++  "Could not save the account. Check the plugin and try again.": "此账号未能保存，请检查插件运行状态后重试",
++  "Duplicate account. The existing sign-in was kept.": "重复账号，已保留已有登录",
++  "Imported. Sign in again from Providers when authorization expires.": "已导入当前授权，到期或失效后请在供应商页面重新登录",
++  "Could not prepare the WorkBuddy plugin. Check the network and plugin and try again.": "无法准备 WorkBuddy 插件，请检查网络或插件状态后重试",
++  "The WorkBuddy community plugin is unavailable.": "WorkBuddy 社区插件尚未就绪",
++  "Import WorkBuddy accounts": "导入 WorkBuddy 账号",
++  "Choose a WorkBuddy or CodeBuddy JSON export to preview its accounts.": "选择 WorkBuddy 或 CodeBuddy 的 JSON 导出文件以预览账号。",
++  "Choose JSON file": "选择 JSON 文件",
++  "Import selected file": "确认导入",
++  "Reading file…": "正在读取文件…",
++  "Importing accounts…": "正在导入账号…",
++  "Could not read the selected file.": "无法读取所选文件。",
++  "Account {n}": "账号 {n}",
++  "Could not import accounts. Try again.": "无法导入账号，请重试。"
++});
++Object.assign(I18N["zh-TW"], {
++  "Magpie found existing sign-ins on this computer. It moves them to the plugin in the background, then the account list updates here.": "Magpie 偵測到這台電腦已有登入紀錄。背景移轉至外掛後，帳號清單會自動更新。",
++  "Magpie Windows releases": "Magpie Windows"
++});
++Object.assign(I18N["ja"], {
++  "Magpie found existing sign-ins on this computer. It moves them to the plugin in the background, then the account list updates here.": "このコンピューターに保存されたログイン情報が見つかりました。バックグラウンドでプラグインへ移行した後、アカウント一覧が更新されます。",
++  "Magpie Windows releases": "Magpie Windows リリース"
++});
++Object.assign(I18N["de"], {
++  "Magpie found existing sign-ins on this computer. It moves them to the plugin in the background, then the account list updates here.": "Magpie hat vorhandene Anmeldungen auf diesem Computer gefunden. Nach der Migration zum Plugin im Hintergrund wird die Kontoliste hier aktualisiert.",
++  "Magpie Windows releases": "Magpie-Windows-Versionen"
++});
 diff --git a/internal/gui/assets/workbuddy-import.js b/internal/gui/assets/workbuddy-import.js
 new file mode 100644
 index 0000000000000000000000000000000000000000..37f6174d24db8a73605737ce895328c585839445
