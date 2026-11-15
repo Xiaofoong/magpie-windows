@@ -97,7 +97,7 @@ index c93f1c9cc67fe0af673804d75e163d73f1012700..1c2519054ee48d16f035148763cbc31f
  /* ---------- modal ---------- */
  .modal {
 diff --git a/internal/gui/assets/app.js b/internal/gui/assets/app.js
-index dff131c8b8ec613289067696304b0a24fcbc9bb6..b980f9787cfdf0981ed29eb3f4d9d9944fdb82ad 100644
+index dff131c8b8ec613289067696304b0a24fcbc9bb6..03b1c2e020e9f80029012c05f6d681133bf8d654 100644
 --- a/internal/gui/assets/app.js
 +++ b/internal/gui/assets/app.js
 @@ -4343,6 +4343,13 @@ function updatePath(p) {
@@ -201,15 +201,6 @@ index dff131c8b8ec613289067696304b0a24fcbc9bb6..b980f9787cfdf0981ed29eb3f4d9d994
    // what changed in this version, and in one waiting; a build from source
    // has no notes
    if (/^v?\d+\.\d+\.\d+$/.test(s.version || "")) {
-@@ -20125,7 +20140,7 @@ function renderSettings() {
-   if (s.updateSkip && !s.noUpdatePill) {
-     api(updatePath("update")).then((u) => {
-       if (!pill.isConnected || !u || u.latest !== s.updateSkip) return;
--      pill.querySelector(".sub").textContent = t("Hidden for {v} until a newer version is out", { v: u.latest });
-+      pill.querySelector(".sub").textContent = t("Hidden for {v} until a newer version is out", { v: updateVersionText(u.latest) });
-       const back = el("button", "text", t("Show again"));
-       back.onclick = () => skipUpdate("");
-       pill.querySelector(".val").prepend(back);
 @@ -20145,7 +20160,9 @@ function renderSettings() {
    // out, or Stable, one a week and an urgent one at once, chosen by the
    // update feed. It holds for the version row's Check too, so it stays lit
