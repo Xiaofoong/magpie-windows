@@ -97,7 +97,7 @@ index c93f1c9cc67fe0af673804d75e163d73f1012700..1c2519054ee48d16f035148763cbc31f
  /* ---------- modal ---------- */
  .modal {
 diff --git a/internal/gui/assets/app.js b/internal/gui/assets/app.js
-index dff131c8b8ec613289067696304b0a24fcbc9bb6..03b1c2e020e9f80029012c05f6d681133bf8d654 100644
+index dff131c8b8ec613289067696304b0a24fcbc9bb6..fb79edfd229284e839aa8b08c5b6f6fec0483e68 100644
 --- a/internal/gui/assets/app.js
 +++ b/internal/gui/assets/app.js
 @@ -4343,6 +4343,13 @@ function updatePath(p) {
@@ -192,8 +192,26 @@ index dff131c8b8ec613289067696304b0a24fcbc9bb6..03b1c2e020e9f80029012c05f6d68113
    const acts = el("div", "dep-acts");
    const b = el("button", "text action", said?.busy || (why ? t("Try again") : t("Move to the plugin")));
    b.title = p.package; // the npm package: for the curious, not the sentence
-@@ -20109,7 +20124,7 @@ function renderSettings() {
-     about.append(r);
+@@ -20098,6 +20113,12 @@ function renderSettings() {
+   const about = $("#about");
+   about.replaceChildren();
++  const windowsReleases = window.bootPrefs?.workbuddyReleaseChannel;
+   const row = (name, sub, value, ...tools) => {
++    if (windowsReleases && name === t("Update channel")) {
++      sub = "";
++      value = t("Magpie Windows releases");
++      tools = [];
++    }
+     const r = el("div", "row pref");
+     const who = el("div", "who");
+     who.append(el("div", "name", name));
+@@ -20106,10 +20127,11 @@ function renderSettings() {
+     if (value) val.append(el("code", "", value));
+     val.append(...tools);
+     r.append(who, val);
+-    about.append(r);
++    // The custom release feed has fixed sources. Keep these rows detached.
++    if (!windowsReleases || (name !== t("Download source") && name !== t("Update source"))) about.append(r);
      return r;
    };
 -  renderUpdate(row(t("Version"), "", s.version));
@@ -201,27 +219,18 @@ index dff131c8b8ec613289067696304b0a24fcbc9bb6..03b1c2e020e9f80029012c05f6d68113
    // what changed in this version, and in one waiting; a build from source
    // has no notes
    if (/^v?\d+\.\d+\.\d+$/.test(s.version || "")) {
-@@ -20145,7 +20160,9 @@ function renderSettings() {
-   // out, or Stable, one a week and an urgent one at once, chosen by the
-   // update feed. It holds for the version row's Check too, so it stays lit
-   // with automatic updates off.
--  row(t("Update channel"), s.updateChannel === "stable"
-+  if (window.bootPrefs?.workbuddyReleaseChannel) {
-+    row(t("Update channel"), "", t("Magpie Windows releases")).classList.add("update-channel-row");
-+  } else row(t("Update channel"), s.updateChannel === "stable"
-     ? t("One version a week, out for three days first, and urgent fixes at once. What's new lists every change since yours")
-     : t("Every version as soon as it is out"), "",
-     segs([["every", t("Every version")], ["stable", t("Stable")]], s.updateChannel === "stable" ? "stable" : "every",
-@@ -20159,7 +20176,7 @@ function renderSettings() {
-     segsOO(!s.noAutoDownload, (v) => savePrefs({ ...keep, noAutoDownload: !v }))).classList.add("update-download-row");
-   row(t("Restart automatically"), s.noAutoUpdate ? t("While automatic updates are on") : t("Once an update is downloaded, restarts into it without cutting off an agent's request"), "",
-     segsOO(s.autoRestart, (v) => savePrefs({ ...keep, autoRestart: v }))).classList.add("update-restart-row", ...(s.noAutoUpdate ? ["off"] : []));
--  renderUpdateMirror(row(t("Download source"), "", ""), s);
-+  if (!window.bootPrefs?.workbuddyReleaseChannel) renderUpdateMirror(row(t("Download source"), "", ""), s);
-   const open = el("button", "text", t("Open"));
-   open.onclick = () => api("settings/reveal", {}).catch(statusErr);
-   // portable (a data folder beside magpie, #508): everything is in there
-@@ -22497,7 +22514,7 @@ async function renderUpdate(r, u) {
+@@ -22445,6 +22467,10 @@ async function renderUpdate(r, u) {
+     if (!u || !r.isConnected || seqOf(r) !== seq) return;
+     if (early) updateSeq.set(r, seq + 1); // stops timers
+   } else if (!r.isConnected) return;
++  // The custom feed has a single channel, including for existing settings.
++  if (window.bootPrefs?.workbuddyReleaseChannel && u.state === "latest") {
++    u = { ...u, channel: "", newest: "" };
++  }
+   updateLast = u, u.at ??= Date.now();
+   const who = r.querySelector(".who"), val = r.querySelector(".val");
+   const sub = who.querySelector(".sub") || who.appendChild(el("div", "sub"));
+@@ -22497,7 +22523,7 @@ async function renderUpdate(r, u) {
    };
    switch (u.state) {
      case "ready": {
@@ -230,7 +239,7 @@ index dff131c8b8ec613289067696304b0a24fcbc9bb6..03b1c2e020e9f80029012c05f6d68113
        // a failed install says why, and offers the release page
        sub.title = u.error || "";
        if (u.error) sub.classList.add("wraps");
-@@ -22538,7 +22555,7 @@ async function renderUpdate(r, u) {
+@@ -22538,7 +22564,7 @@ async function renderUpdate(r, u) {
      }
      case "found": {
        // downloads wait for a click (#2296): what is out, and its size
@@ -239,7 +248,7 @@ index dff131c8b8ec613289067696304b0a24fcbc9bb6..03b1c2e020e9f80029012c05f6d68113
        const get = btn(t("Download update"), async () => {
          if (updateBusy) return;
          get.disabled = true;
-@@ -22551,7 +22568,7 @@ async function renderUpdate(r, u) {
+@@ -22551,7 +22577,7 @@ async function renderUpdate(r, u) {
        break;
      }
      case "available":
@@ -248,7 +257,7 @@ index dff131c8b8ec613289067696304b0a24fcbc9bb6..03b1c2e020e9f80029012c05f6d68113
        if (u.stuck) sub.textContent += " · " + updateStuck(u);
        if (u.packaged) { sub.classList.add("wraps"); btn(t("Check"), check); break; }
        btn(t("Download"), () => (web && u.url ? window.open(u.url, "_blank", "noopener") : api("update/install", {})));
-@@ -22559,11 +22576,11 @@ async function renderUpdate(r, u) {
+@@ -22559,11 +22585,11 @@ async function renderUpdate(r, u) {
        break;
      case "downloading":
        if (UPDATE_STEPS[u.step] && u.step !== "retry") {
@@ -262,14 +271,7 @@ index dff131c8b8ec613289067696304b0a24fcbc9bb6..03b1c2e020e9f80029012c05f6d68113
        if (u.total) sub.textContent += " " + Math.floor(((u.done || 0) / u.total) * 100) + "% · " + t("{done} of {total} MB", { done: ((u.done || 0) / 1e6).toFixed(1), total: (u.total / 1e6).toFixed(1) });
        else if (u.done) sub.textContent += " " + t("{done} MB", { done: (u.done / 1e6).toFixed(1) });
        if (u.step === "retry") sub.textContent += " · " + t("Reconnecting…");
-@@ -22578,20 +22595,20 @@ async function renderUpdate(r, u) {
-       break;
-     case "latest":
-       // Stable's says the newest out (ylspcm on X)
--      sub.textContent = u.newest ? t("Up to date on Stable · {v} is out on Every version", { v: u.newest }) : t(u.channel ? "Up to date on Stable" : "Up to date");
-+      sub.textContent = u.newest ? t("Up to date on Stable · {v} is out on Every version", { v: updateVersionText(u.newest) }) : t(u.channel ? "Up to date on Stable" : "Up to date");
-       if (u.newest) btn(t("Switch to Every version"), () => savePrefs({ ...prefsKeep(prefs), updateChannel: "" }));
-       btn(t("Check"), check);
+@@ -22584,14 +22610,14 @@ async function renderUpdate(r, u) {
        break;
      case "error":
        // the reason in sight: "timed out" says try a proxy, a 404 says wait
@@ -287,7 +289,7 @@ index dff131c8b8ec613289067696304b0a24fcbc9bb6..03b1c2e020e9f80029012c05f6d68113
            + (u.error ? " · " + u.error.replace("through the mirror " + u.mirror + ": ", "").replace(/^Get "[^"]*": /, "") : "");
          btn(t("Download from GitHub"), async () => {
            if (updateBusy) return;
-@@ -22614,8 +22631,8 @@ async function renderUpdate(r, u) {
+@@ -22614,8 +22640,8 @@ async function renderUpdate(r, u) {
        // the new version didn't start here (#894): why, and what to do
        const b = u.blocked || {};
        sub.textContent = b.policy

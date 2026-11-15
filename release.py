@@ -14,7 +14,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parent
 BASE = "v0.1.3908"
-REVISION = 7
+REVISION = 8
 UPSTREAM = "yetone/magpie-releases"
 CUSTOM = re.compile(r"v(\d+)\.(\d+)\.(\d+)-workbuddy\.([1-9]\d*)")
 STABLE = re.compile(r"v(\d+)\.(\d+)\.(\d+)")
