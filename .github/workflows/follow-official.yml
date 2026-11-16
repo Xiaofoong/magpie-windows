@@ -7,6 +7,7 @@ on:
       - '.github/workflows/follow-official.yml'
       - 'release.py'
       - 'workbuddy.patch'
+      - 'tests/windows-ui.test.cjs'
   schedule:
     - cron: '2-57/5 * * * *'
 
@@ -52,6 +53,10 @@ jobs:
           python3 release.py retry git -C upstream fetch --no-tags --depth 1 origin refs/tags/v0.1.3908
           git -C upstream apply --3way ../workbuddy.patch
           git -C upstream diff --cached --check
+      - name: Verify Windows update labels and migration text
+        run: |
+          node --check upstream/internal/gui/assets/app.js
+          node --test tests/windows-ui.test.cjs
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version-file: upstream/go.mod
