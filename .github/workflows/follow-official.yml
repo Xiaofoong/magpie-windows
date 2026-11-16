@@ -8,6 +8,7 @@ on:
       - 'release.py'
       - 'workbuddy.patch'
       - 'tests/windows-ui.test.cjs'
+      - 'tests/test_release.py'
   schedule:
     - cron: '2-57/5 * * * *'
 
@@ -22,67 +23,81 @@ jobs:
   check:
     runs-on: ubuntu-24.04
     outputs:
-      changed: ${{ steps.plan.outputs.changed }}
+      build: ${{ steps.plan.outputs.build }}
       core: ${{ steps.plan.outputs.core }}
-      tag: ${{ steps.plan.outputs.tag }}
-      winver: ${{ steps.plan.outputs.winver }}
+      published: ${{ steps.plan.outputs.published }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+      - name: Test release selection and patch conflicts
+        if: github.event_name == 'push'
+        run: python3 -m unittest discover -s tests -p test_release.py
       - id: plan
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          VALIDATE_CURRENT: ${{ github.event_name == 'push' }}
         run: python3 release.py plan "$REPO"
 
   build:
     needs: check
-    if: needs.check.outputs.changed == 'true'
+    if: needs.check.outputs.build == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
+    outputs:
+      publish: ${{ steps.prepare.outputs.publish }}
+      core: ${{ steps.prepare.outputs.core }}
+      tag: ${{ steps.prepare.outputs.tag }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - name: Check out upstream and apply the WorkBuddy changes
+      - name: Prepare the newest compatible official stable core
+        id: prepare
         env:
+          GH_TOKEN: ${{ github.token }}
           CORE: ${{ needs.check.outputs.core }}
-        run: |
-          python3 release.py retry git clone --depth 1 --branch "$CORE" https://github.com/yetone/magpie.git upstream
-          python3 release.py retry git -C upstream fetch --no-tags --depth 1 origin refs/tags/v0.1.3908
-          git -C upstream apply --3way ../workbuddy.patch
-          git -C upstream diff --cached --check
+          PUBLISHED: ${{ needs.check.outputs.published }}
+        run: python3 release.py prepare upstream "$CORE" "$PUBLISHED"
       - name: Verify Windows update labels and migration text
+        if: steps.prepare.outputs.ready == 'true'
         run: |
           node --check upstream/internal/gui/assets/app.js
           node --test tests/windows-ui.test.cjs
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        if: steps.prepare.outputs.ready == 'true'
         with:
           go-version-file: upstream/go.mod
           cache-dependency-path: upstream/go.sum
       - name: Download Go dependencies
+        if: steps.prepare.outputs.ready == 'true'
         working-directory: upstream
         run: python3 ../release.py retry go mod download
       - name: Test desktop account transfer and update verification
+        if: steps.prepare.outputs.ready == 'true'
         working-directory: upstream
         run: >-
           go test -tags nogui ./internal/gui ./internal/plugin ./internal/update
           -run '^Test(WorkBuddy(Import|Export|Update|Executable).*|FlatAndDomesticFormats|Import(FormatsAndTimeUnits|RejectsMismatchAndUntrustedDomain|PreviewIsReadOnlyCommitKeepsDuplicates|PartialFailureDoesNotLeakOrLoseOthers|NewUIDKeepsExistingSignIn))$'
           -count=1
       - name: Check CLI route parity against upstream
+        if: steps.prepare.outputs.ready == 'true'
         run: python3 release.py check-parity upstream
       - name: Build the Windows editions
+        if: steps.prepare.outputs.ready == 'true'
         working-directory: upstream
         env:
           REPO: ${{ github.repository }}
-          TAG: ${{ needs.check.outputs.tag }}
-          WINVER: ${{ needs.check.outputs.winver }}
+          TAG: ${{ steps.prepare.outputs.tag }}
+          WINVER: ${{ steps.prepare.outputs.winver }}
         run: |
           make release-windows VERSION="$TAG" WINVER="$WINVER" \
             LDFLAGS="-s -w -X main.version=$TAG -X github.com/yetone/magpie/internal/update.workBuddyReleaseRepo=$REPO"
           python3 ../release.py package . ../dist "$TAG" "$REPO"
+          (cd ../dist && sha256sum --check SHA256SUMS.txt)
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: steps.prepare.outputs.publish == 'true'
         with:
           name: windows-workbuddy
           path: dist/
@@ -90,8 +105,8 @@ jobs:
           retention-days: 3
 
   publish:
-    needs: [check, build]
-    if: needs.check.outputs.changed == 'true'
+    needs: build
+    if: needs.build.outputs.publish == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -108,8 +123,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          TAG: ${{ needs.check.outputs.tag }}
-          CORE: ${{ needs.check.outputs.core }}
+          TAG: ${{ needs.build.outputs.tag }}
+          CORE: ${{ needs.build.outputs.core }}
         run: |
           python3 release.py retry gh api "repos/$REPO/releases?per_page=100" > releases.json
           existing=$(jq -r --arg tag "$TAG" '[.[] | select(.tag_name == $tag)] | first | if . == null then "absent" elif .draft then "draft" else "published" end' releases.json)

@@ -16,6 +16,8 @@ ROOT = Path(__file__).resolve().parent
 BASE = "v0.1.3908"
 REVISION = 9
 UPSTREAM = "yetone/magpie-releases"
+SOURCE = "https://github.com/yetone/magpie.git"
+MAX_FALLBACKS = 4
 CUSTOM = re.compile(r"v(\d+)\.(\d+)\.(\d+)-workbuddy\.([1-9]\d*)")
 STABLE = re.compile(r"v(\d+)\.(\d+)\.(\d+)")
 ARCHES = {"amd64": ("x64", 0x8664), "arm64": ("ARM64", 0xAA64)}
@@ -102,27 +104,97 @@ def version(tag, pattern):
     return fields
 
 
-def plan(repo):
+def outputs(**values):
+    print(json.dumps(values))
+    with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+        for name, value in values.items():
+            print(f"{name}={value}", file=out)
+
+
+def summarize(message):
+    print(message, flush=True)
+    if path := os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(path, "a", encoding="utf-8") as out:
+            print(message, file=out)
+
+
+def plan(repo, validate_current=False):
     latest = gh_api(f"repos/{UPSTREAM}/releases/latest")
     if latest["draft"] or latest["prerelease"]:
         raise ValueError("The upstream release must be stable")
     core = latest["tag_name"]
-    fields = version(core, STABLE)
-    if fields < version(BASE, STABLE):
-        core, fields = BASE, version(BASE, STABLE)
-    tag = f"{core}-workbuddy.{REVISION}"
+    candidate = (*version(core, STABLE), REVISION)
     releases = gh_api(f"repos/{repo}/releases?per_page=100")
-    current = [version(r["tag_name"], CUSTOM) for r in releases
-               if not r["draft"] and not r["prerelease"] and CUSTOM.fullmatch(r["tag_name"])]
     if any(not CUSTOM.fullmatch(r["tag_name"]) for r in releases if not r["draft"]):
         raise ValueError("Use a dedicated Windows release repository")
-    changed = not current or max(current) < (*fields, REVISION)
-    outputs = {"tag": tag, "core": core, "winver": ".".join(map(str, (*fields, REVISION))),
-               "changed": str(changed).lower()}
-    print(json.dumps(outputs))
-    with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
-        for name, value in outputs.items():
-            print(f"{name}={value}", file=out)
+    published = max((r["tag_name"] for r in releases if not r["draft"] and not r["prerelease"]),
+                    key=lambda tag: version(tag, CUSTOM), default="")
+    current = version(published, CUSTOM) if published else ()
+    supported = candidate[:3] >= version(BASE, STABLE)
+    build = supported and (candidate > current or (validate_current and candidate == current))
+    if not build:
+        summarize(f"No new Windows update to build. Official stable: `{core}`. Published: `{published or 'none'}`.")
+    outputs(build=str(build).lower(), core=core, published=published)
+
+
+def fallback_cores(core, current):
+    upper = version(core, STABLE)
+    baseline = version(BASE, STABLE)
+    releases = gh_api(f"repos/{UPSTREAM}/releases?per_page=30")
+    candidates = {r["tag_name"] for r in releases if not r["draft"] and not r["prerelease"]
+                  and STABLE.fullmatch(r["tag_name"])}
+    ranked = sorted(((version(tag, STABLE), tag) for tag in candidates), reverse=True)
+    return [tag for fields, tag in ranked if baseline <= fields < upper
+            and (*fields, REVISION) > current][:MAX_FALLBACKS]
+
+
+def apply_overlay(source, core, patch):
+    git = ["git", "-C", source]
+    retry([*git, "fetch", "--no-tags", "--depth", "1", "origin", f"refs/tags/{core}"], timeout=120)
+    subprocess.run([*git, "checkout", "--detach", "--force", "FETCH_HEAD"], check=True)
+    result = subprocess.run([*git, "apply", "--3way", patch])
+    if result.returncode:
+        if result.returncode != 1:
+            result.check_returncode()
+        conflicts = subprocess.check_output([*git, "diff", "--name-only", "--diff-filter=U", "-z"], text=True)
+        if not conflicts:
+            result.check_returncode()
+        subprocess.run([*git, "reset", "--hard", "HEAD"], check=True)
+        return conflicts.rstrip("\0").split("\0")
+    subprocess.run([*git, "diff", "--cached", "--check"], check=True)
+    return []
+
+
+def prepare(source, core, published):
+    current = version(published, CUSTOM) if published else ()
+    subprocess.run(["git", "init", "--quiet", source], check=True)
+    git = ["git", "-C", source]
+    subprocess.run([*git, "remote", "add", "origin", SOURCE], check=True)
+    retry([*git, "fetch", "--no-tags", "--depth", "1", "origin", f"refs/tags/{BASE}"], timeout=120)
+    patch = ROOT / "workbuddy.patch"
+
+    def choose(candidate):
+        conflicts = apply_overlay(source, candidate, patch)
+        if conflicts:
+            files = ", ".join(f"`{name}`" for name in conflicts)
+            summarize(f"- `{candidate}` has WorkBuddy patch conflicts in {files}.")
+            print(f"::warning::WorkBuddy patch conflicts on {candidate}; this core will not be built.", flush=True)
+            return False
+        fields = (*version(candidate, STABLE), REVISION)
+        publish = fields > current
+        action = "Building for release" if publish else "Validating the already published core"
+        summarize(f"{action}: `{candidate}`.")
+        outputs(ready="true", publish=str(publish).lower(), core=candidate,
+                tag=f"{candidate}-workbuddy.{REVISION}", winver=".".join(map(str, fields)))
+        return True
+
+    if choose(core):
+        return
+    for older in fallback_cores(core, current):
+        if choose(older):
+            return
+    summarize(f"No compatible newer Windows update. Kept `{published or 'no published release'}` available.")
+    outputs(ready="false", publish="false")
 
 
 def file_hash(path):
@@ -203,7 +275,10 @@ def verify(repo, tag, directory):
 def main():
     command, *args = sys.argv[1:]
     if command == "plan":
-        plan(*args)
+        plan(args[0], os.environ.get("VALIDATE_CURRENT") == "true")
+    elif command == "prepare":
+        source, core, published = args
+        prepare(Path(source).resolve(), core, published)
     elif command == "retry":
         retry(args)
     elif command == "check-parity":
