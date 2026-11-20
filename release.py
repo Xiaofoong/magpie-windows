@@ -14,7 +14,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parent
 BASE = "v0.1.3908"
-REVISION = 9
+REVISION = 10
 UPSTREAM = "yetone/magpie-releases"
 SOURCE = "https://github.com/yetone/magpie.git"
 MAX_FALLBACKS = 4
@@ -202,10 +202,12 @@ def file_hash(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def assets():
+def assets(include_installers=True):
     for arch, (title, _) in ARCHES.items():
         yield f"magpie-windows-{arch}.exe"
         yield f"Magpie-Windows-{title}.zip"
+        if include_installers:
+            yield f"Magpie-Windows-{title}-Setup.exe"
     yield "SHA256SUMS.txt"
 
 
@@ -247,7 +249,23 @@ def package(source, target, tag, repo):
         with zipfile.ZipFile(zip_path) as z:
             if z.testzip() is not None:
                 raise ValueError(f"{zip_path.name} failed ZIP validation")
-    names = [name for name in assets() if name != "SHA256SUMS.txt"]
+    seal(target, include_installers=False)
+
+
+def seal(target, include_installers=True):
+    names = [name for name in assets(include_installers) if name != "SHA256SUMS.txt"]
+    if include_installers:
+        # Inno Setup bootstraps both application architectures with an x86
+        # installer. Check its PE header separately from the installed app.
+        for title, _ in ARCHES.values():
+            path = target / f"Magpie-Windows-{title}-Setup.exe"
+            with path.open("rb") as stream:
+                header = stream.read(64)
+                if header[:2] != b"MZ":
+                    raise ValueError(f"{path.name} is not a Windows installer")
+                stream.seek(struct.unpack_from("<I", header, 60)[0])
+                if stream.read(6) != b"PE\0\0\x4c\x01":
+                    raise ValueError(f"{path.name} has an unexpected installer architecture")
     (target / "SHA256SUMS.txt").write_text(
         "".join(f"{file_hash(target / name)}  {name}\n" for name in names), encoding="ascii"
     )
@@ -289,6 +307,8 @@ def main():
     elif command == "verify":
         repo, tag, directory = args
         verify(repo, tag, Path(directory))
+    elif command == "seal":
+        seal(Path(args[0]))
     else:
         raise ValueError(f"Unknown command: {command}")
 

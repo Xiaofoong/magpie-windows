@@ -9,6 +9,7 @@ on:
       - 'workbuddy.patch'
       - 'tests/windows-ui.test.cjs'
       - 'tests/test_release.py'
+      - 'installer/**'
   schedule:
     - cron: '2-57/5 * * * *'
 
@@ -49,6 +50,8 @@ jobs:
       publish: ${{ steps.prepare.outputs.publish }}
       core: ${{ steps.prepare.outputs.core }}
       tag: ${{ steps.prepare.outputs.tag }}
+      winver: ${{ steps.prepare.outputs.winver }}
+      ready: ${{ steps.prepare.outputs.ready }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -97,7 +100,50 @@ jobs:
           python3 ../release.py package . ../dist "$TAG" "$REPO"
           (cd ../dist && sha256sum --check SHA256SUMS.txt)
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: steps.prepare.outputs.publish == 'true'
+        if: steps.prepare.outputs.ready == 'true'
+        with:
+          name: windows-programs
+          path: dist/
+          if-no-files-found: error
+          retention-days: 3
+
+  installer:
+    needs: build
+    if: needs.build.outputs.ready == 'true'
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: windows-programs
+          path: dist
+      - name: Build x64 and ARM64 installers
+        env:
+          CORE: ${{ needs.build.outputs.core }}
+          WINVER: ${{ needs.build.outputs.winver }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (!(Test-Path $compiler)) { throw 'Inno Setup compiler is missing' }
+          foreach ($line in Get-Content dist/SHA256SUMS.txt) {
+            $hash, $name = $line -split '  ', 2
+            if ((Get-FileHash "dist/$name" -Algorithm SHA256).Hash.ToLowerInvariant() -ne $hash) {
+              throw "Downloaded program checksum failed for $name"
+            }
+          }
+          foreach ($arch in @('amd64', 'arm64')) {
+            & $compiler "/DArch=$arch" "/DAppVersion=$($env:CORE.TrimStart('v'))" "/DWindowsVersion=$env:WINVER" installer/magpie.iss
+            if ($LASTEXITCODE -ne 0) { throw "Installer compilation failed for $arch" }
+          }
+          python release.py seal dist
+          if ($LASTEXITCODE -ne 0) { throw 'Installer file verification failed' }
+      - name: Verify installation and retained records
+        run: ./installer/test-install.ps1
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: needs.build.outputs.publish == 'true'
         with:
           name: windows-workbuddy
           path: dist/
@@ -105,7 +151,7 @@ jobs:
           retention-days: 3
 
   publish:
-    needs: build
+    needs: [build, installer]
     if: needs.build.outputs.publish == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -130,7 +176,7 @@ jobs:
           existing=$(jq -r --arg tag "$TAG" '[.[] | select(.tag_name == $tag)] | first | if . == null then "absent" elif .draft then "draft" else "published" end' releases.json)
           case "$existing" in
             absent)
-              printf 'Core %s. Includes WorkBuddy account JSON import and export.\n\nhttps://github.com/yetone/magpie/releases/tag/%s\n' "$CORE" "$CORE" > notes.txt
+              printf 'Core %s. Includes Windows setup installers and WorkBuddy account JSON import and export.\n\nDownload Magpie-Windows-x64-Setup.exe for Intel/AMD PCs, or Magpie-Windows-ARM64-Setup.exe for ARM PCs.\n\nhttps://github.com/yetone/magpie/releases/tag/%s\n' "$CORE" "$CORE" > notes.txt
               gh release create "$TAG" --repo "$REPO" --target "$GITHUB_SHA" --draft --title "Magpie Windows $CORE" --notes-file notes.txt
               ;;
             draft) ;;

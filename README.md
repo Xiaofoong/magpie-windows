@@ -4,9 +4,13 @@ Windows x64 和 ARM64 定制版，基于 MIT 许可的 [yetone/magpie](https://g
 
 ## 下载和使用
 
-在 [Releases](https://github.com/Xiaofoong/magpie-windows/releases/latest) 下载 Windows GUI。Intel / AMD 电脑下载 `magpie-windows-amd64.exe`，ARM 电脑下载 `magpie-windows-arm64.exe`。
+在 [Releases](https://github.com/Xiaofoong/magpie-windows/releases/latest) 下载 Windows 安装程序。Intel / AMD 电脑下载 `Magpie-Windows-x64-Setup.exe`，ARM 电脑下载 `Magpie-Windows-ARM64-Setup.exe`。先从托盘退出旧版 Magpie，再运行安装程序。
 
-从托盘退出正在运行的 Magpie，再双击下载的 EXE。程序直接打开「供应商」页，可看到导入和导出。EXE 会在自己的目录中更新，并使用当前 Windows 用户的 Magpie 配置。
+默认安装在当前用户的 `%LOCALAPPDATA%\Programs\magpie`，提供开始菜单和桌面快捷方式。以后从快捷方式打开。同一 Windows 用户的账号、设置和会话数据继续由 Magpie 保存在 `%USERPROFILE%\.config\magpie`，自定义了 `XDG_CONFIG_HOME` 时使用该目录。WebView2 的浏览器记录沿用安装前已有的配置目录，安装程序会检测 `magpie.exe` 和对应架构的下载版 EXE 数据目录。重装、升级和卸载均保留用户数据。
+
+如果旧版使用程序旁边的 `data` 文件夹或 `.portable` 标记，请先备份该文件夹。安装版读取用户目录，需要迁移原来的便携版数据才能看到其中的记录。安装程序无法恢复已经删除的文件，意外断电时尚未保存的内容也可能丢失。
+
+原有的独立 EXE 和 ZIP 也继续提供下载。程序直接打开「供应商」页，可看到导入和导出。安装后仍可在设置里检查更新。
 
 ## 自动更新
 

@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import struct
 import subprocess
 import tempfile
 import unittest
@@ -104,6 +105,36 @@ class ReleaseSelectionTest(unittest.TestCase):
         with self.assertRaises(subprocess.CalledProcessError):
             release.prepare(source, "v0.1.4250", "")
         self.assertFalse(self.out.exists())
+
+
+class InstallerPackageTest(unittest.TestCase):
+    def test_final_manifest_requires_both_installers(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            with self.assertRaises(FileNotFoundError):
+                release.seal(directory)
+            self.assertFalse((directory / "SHA256SUMS.txt").exists())
+
+    def test_installers_and_programs_are_all_hashed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            header = bytearray(64)
+            header[:2] = b"MZ"
+            struct.pack_into("<I", header, 60, 64)
+            installer = header + b"PE\0\0\x4c\x01"
+            for name in release.assets():
+                if name != "SHA256SUMS.txt":
+                    data = installer if name.endswith("-Setup.exe") else b"package fixture"
+                    (directory / name).write_bytes(data)
+            release.seal(directory)
+            lines = (directory / "SHA256SUMS.txt").read_text().splitlines()
+            self.assertEqual(len(lines), 6)
+            for line in lines:
+                digest, name = line.split("  ")
+                self.assertEqual(digest, release.file_hash(directory / name))
+            (directory / "Magpie-Windows-ARM64-Setup.exe").write_bytes(b"invalid")
+            with self.assertRaises(ValueError):
+                release.seal(directory)
 
 
 if __name__ == "__main__":
