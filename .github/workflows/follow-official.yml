@@ -77,13 +77,30 @@ jobs:
         if: steps.prepare.outputs.ready == 'true'
         working-directory: upstream
         run: python3 ../release.py retry go mod download
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        if: steps.prepare.outputs.ready == 'true'
+        with:
+          bun-version: 1.4.2
       - name: Test desktop account transfer and update verification
         if: steps.prepare.outputs.ready == 'true'
         working-directory: upstream
-        run: >-
-          go test -tags nogui ./internal/gui ./internal/plugin ./internal/update
-          -run '^Test(WorkBuddy(Import|Export|Update|Executable).*|FlatAndDomesticFormats|Import(FormatsAndTimeUnits|RejectsMismatchAndUntrustedDomain|PreviewIsReadOnlyCommitKeepsDuplicates|PartialFailureDoesNotLeakOrLoseOthers|NewUIDKeepsExistingSignIn))$'
-          -count=1
+        run: |
+          go test -json -tags nogui ./internal/gui ./internal/plugin ./internal/update \
+            -run '^Test(WorkBuddy(Import|Export|Update|Executable|SavedAccounts).*|FlatAndDomesticFormats|Import(FormatsAndTimeUnits|RejectsMismatchAndUntrustedDomain|PreviewIsReadOnlyCommitKeepsDuplicates|PartialFailureDoesNotLeakOrLoseOthers|NewUIDKeepsExistingSignIn)|ZeroedPluginAuthReadFromBackup|PluginAuthSyncedBeforeRename)$' \
+            -count=1 | tee account-tests.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          events = [json.loads(line) for line in Path('account-tests.json').read_text().splitlines()]
+          skipped = [event['Test'] for event in events if event['Action'] == 'skip' and 'Test' in event]
+          required = {'TestWorkBuddySavedAccountsSurviveHostRestart',
+                      'TestImportNewUIDKeepsExistingSignIn',
+                      'TestZeroedPluginAuthReadFromBackup', 'TestPluginAuthSyncedBeforeRename'}
+          passed = {event['Test'] for event in events if event['Action'] == 'pass' and 'Test' in event}
+          if skipped or required - passed:
+              raise SystemExit(f'Account persistence verification incomplete: skipped={skipped}, missing={sorted(required - passed)}')
+          print('Account save, restart, backup recovery and durable-write checks executed and passed.')
+          PY
       - name: Check CLI route parity against upstream
         if: steps.prepare.outputs.ready == 'true'
         run: python3 release.py check-parity upstream

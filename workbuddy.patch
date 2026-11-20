@@ -1644,14 +1644,15 @@ index 57f80609f4f8469ad0135fda65935977e0b7172e..add50c48d4df36359bebc1225ee8a076
  // models hook said the vendor refused the sign-in, if it did.
 diff --git a/internal/plugin/workbuddy_import_test.go b/internal/plugin/workbuddy_import_test.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..f0a7f5287023f0bbc91dd82d592a1816f58350ba
+index 0000000000000000000000000000000000000000..6120bb80319f8e1525aa7f3a066b7198473b25df
 --- /dev/null
 +++ b/internal/plugin/workbuddy_import_test.go
-@@ -0,0 +1,48 @@
+@@ -0,0 +1,92 @@
 +package plugin
 +
 +import (
 +	"context"
++	"os"
 +	"sync"
 +	"testing"
 +	"time"
@@ -1694,6 +1695,49 @@ index 0000000000000000000000000000000000000000..f0a7f5287023f0bbc91dd82d592a1816
 +	all := Auths("workbuddy")
 +	if len(all) != 2 || all["workbuddy"]["access"] != "fixture-existing" || all["workbuddy"]["refresh"] != "fixture-refresh" {
 +		t.Fatal("unexpected accounts after concurrent import")
++	}
++}
++
++func TestWorkBuddySavedAccountsSurviveHostRestart(t *testing.T) {
++	sandbox(t)
++	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
++	defer cancel()
++	normal := map[string]any{
++		"type": "oauth", "uid": "normal-fixture", "accountId": "normal-fixture",
++		"access": "normal-access-fixture", "refresh": "normal-refresh-fixture",
++		"expires": time.Now().Add(time.Hour).UnixMilli(),
++	}
++	imported := map[string]any{
++		"type": "oauth", "uid": "imported-fixture", "accountId": "imported-fixture",
++		"access": "imported-access-fixture", "expires": time.Now().Add(time.Hour).UnixMilli(),
++	}
++	if _, err := Import(ctx, "workbuddy", normal); err != nil {
++		t.Fatal(err)
++	}
++	if saved, err := ImportNewUID(ctx, "workbuddy", imported); err != nil || !saved {
++		t.Fatalf("save failed: saved=%v err=%v", saved, err)
++	}
++	before, err := os.ReadFile(AuthPath())
++	if err != nil || len(before) == 0 {
++		t.Fatalf("accounts missing on disk: %v", err)
++	}
++	Restart()
++	all := Auths("workbuddy")
++	if len(all) != 2 {
++		t.Fatalf("after restart got %d accounts", len(all))
++	}
++	// Import starts a new host. Its duplicate check reads the saved UID.
++	if saved, err := ImportNewUID(ctx, "workbuddy", imported); err != nil || saved {
++		t.Fatalf("restarted host did not retain imported UID: saved=%v err=%v", saved, err)
++	}
++	foundRefresh := false
++	for _, auth := range all {
++		if auth["uid"] == "normal-fixture" {
++			foundRefresh = auth["refresh"] == "normal-refresh-fixture"
++		}
++	}
++	if !foundRefresh {
++		t.Fatal("saved login refresh credential missing after restart")
 +	}
 +}
 diff --git a/internal/update/install.go b/internal/update/install.go
