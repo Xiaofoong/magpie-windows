@@ -8,6 +8,7 @@ on:
       - 'release.py'
       - 'workbuddy.patch'
       - 'tests/windows-ui.test.cjs'
+      - 'tests/renewable-import-ui.test.cjs'
       - 'tests/test_release.py'
       - 'installer/**'
   schedule:
@@ -67,7 +68,7 @@ jobs:
         if: steps.prepare.outputs.ready == 'true'
         run: |
           node --check upstream/internal/gui/assets/app.js
-          node --test tests/windows-ui.test.cjs
+          node --test tests/*.test.cjs
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         if: steps.prepare.outputs.ready == 'true'
         with:

@@ -1,16 +1,19 @@
 diff --git a/docs/subsystems/providers-accounts.md b/docs/subsystems/providers-accounts.md
-index 01fe8f728cfa1837b262dd9fafcf0731198e2d5f..7115b7763ffa027914a7f1bdedce2d13b4f04aa1 100644
+index 01fe8f728cfa1837b262dd9fafcf0731198e2d5f..dc833d468840aec0fab5248b89988767149a1af8 100644
 --- a/docs/subsystems/providers-accounts.md
 +++ b/docs/subsystems/providers-accounts.md
-@@ -1,5 +1,18 @@
+@@ -1,5 +1,21 @@
  # Providers and accounts
  
 +The desktop Providers page can preview a local WorkBuddy or CodeBuddy JSON
-+export and import its currently valid accounts. It accepts the Mobile export
-+shapes for both regions. Preview never writes credentials. Confirm saves only
-+the current access token through the WorkBuddy plugin host. The host checks for
-+the same provider and UID under its auth lock and keeps any existing sign-in.
-+An expired or unknown expiration requires a fresh sign-in. See
++export for both regions. Preview never writes credentials or refreshes tokens.
++The default transfer mode requires a usable refresh credential and uses the
++plugin's ImportFiles hook to validate, rotate and save it, as a browser sign-in
++does. Existing access-only sign-ins can be upgraded in this mode. The source
++device may need to sign in again after its refresh credential is rotated.
++With transfer off, only a currently valid access token is saved, and an
++existing provider/UID is kept under the host's auth lock. Expired access-only
++credentials require a fresh sign-in. See
 +[`workbuddy_import.go`](../../internal/gui/workbuddy_import.go) and
 +[`ImportNewUID`](../../internal/plugin/providers.go).
 +The desktop export lists local WorkBuddy sign-ins and saves the selected
@@ -408,12 +411,22 @@ index 0000000000000000000000000000000000000000..6118a61b303dea90f9b9b041fd7304da
 +})();
 diff --git a/internal/gui/assets/workbuddy-i18n.js b/internal/gui/assets/workbuddy-i18n.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..fc955912368a58149cba42d14f934064af0ce0d1
+index 0000000000000000000000000000000000000000..49165862bebaec30bbed927e480b340f88c1fc98
 --- /dev/null
 +++ b/internal/gui/assets/workbuddy-i18n.js
-@@ -0,0 +1,104 @@
+@@ -0,0 +1,114 @@
 +// Keep the Windows edition strings independent of the upstream translation table.
 +Object.assign(I18N["zh"], {
++  "Transfer to this computer and renew automatically": "迁移到此电脑并自动续期",
++  "Requires a refresh credential in the file. Transferring rotates the sign-in; the original device may need to sign in again. Without this option, only the current access authorization is imported.": "需要文件中包含刷新凭据。迁移会轮换登录凭据，原设备可能需要重新登录。不勾选时只导入当前访问授权。",
++  "This file has no refresh credential. Sign in on this computer to enable automatic renewal.": "文件没有刷新凭据，请在此电脑直接登录以启用自动续期。",
++  "The refresh credential is invalid.": "刷新凭据格式无效。",
++  "Invalid refresh expiration time.": "刷新凭据的到期时间无效。",
++  "The refresh credential has expired. Sign in on this computer again.": "刷新凭据已过期，请在此电脑重新登录。",
++  "Ready to transfer this sign-in and enable automatic renewal.": "可迁移此登录并启用自动续期。",
++  "Could not prepare the account for automatic renewal.": "无法准备账号的自动续期信息。",
++  "WorkBuddy could not renew this sign-in. Sign in on this computer again.": "WorkBuddy 未能续期此登录，请在此电脑重新登录。",
++  "Imported with automatic renewal. The account stays saved; WorkBuddy may require sign-in again if it revokes the authorization.": "已导入并启用自动续期，账号会保留。WorkBuddy 撤销授权时仍需重新登录。",
 +  "Magpie found existing sign-ins on this computer. It moves them to the plugin in the background, then the account list updates here.": "Magpie 检测到这台电脑上已有登录记录。后台迁移到插件后，账号列表会自动刷新。",
 +  "Magpie Windows releases": "Magpie Windows",
 +  "Could not write the export in the selected folder.": "无法在所选文件夹保存导出文件。",
@@ -518,10 +531,10 @@ index 0000000000000000000000000000000000000000..fc955912368a58149cba42d14f934064
 +})();
 diff --git a/internal/gui/assets/workbuddy-import.js b/internal/gui/assets/workbuddy-import.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..37f6174d24db8a73605737ce895328c585839445
+index 0000000000000000000000000000000000000000..b577865c6eb23a7a4b3bc547cd07c7403d9bf638
 --- /dev/null
 +++ b/internal/gui/assets/workbuddy-import.js
-@@ -0,0 +1,106 @@
+@@ -0,0 +1,131 @@
 +(() => {
 +  const entry = $("#workbuddyImport");
 +  if (!entry || !window.bootPrefs?.workbuddyImport || mode !== "window") return;
@@ -532,6 +545,13 @@ index 0000000000000000000000000000000000000000..37f6174d24db8a73605737ce895328c5
 +    title.id = "workbuddyImportTitle";
 +    dialog.setAttribute("aria-labelledby", title.id);
 +    const description = el("p", "", t("Choose a WorkBuddy or CodeBuddy JSON export to preview its accounts."));
++    const renew = el("input");
++    renew.type = "checkbox";
++    renew.checked = true;
++    renew.id = "workbuddyImportRenew";
++    const renewalChoice = el("label", "");
++    renewalChoice.append(renew, " ", t("Transfer to this computer and renew automatically"));
++    const renewalNote = el("p", "", t("Requires a refresh credential in the file. Transferring rotates the sign-in; the original device may need to sign in again. Without this option, only the current access authorization is imported."));
 +    const status = el("p", "import-status");
 +    status.setAttribute("role", "status");
 +    const accounts = el("ul");
@@ -546,9 +566,9 @@ index 0000000000000000000000000000000000000000..37f6174d24db8a73605737ce895328c5
 +    confirm.disabled = true;
 +    const bar = el("div", "bar");
 +    bar.append(choose, el("span", "grow"), close, confirm);
-+    dialog.append(title, description, input, bar, status, accounts);
++    dialog.append(title, description, renewalChoice, renewalNote, input, bar, status, accounts);
 +
-+    let data = "", saving = false, selection = 0;
++    let data = "", selected = "", saving = false, selection = 0;
 +    function showRows(rows) {
 +      const masked = window.hideAccounts?.on();
 +      accounts.replaceChildren(...rows.map((row) => {
@@ -561,29 +581,13 @@ index 0000000000000000000000000000000000000000..37f6174d24db8a73605737ce895328c5
 +    }
 +
 +    choose.onclick = () => input.click();
-+    input.onchange = async () => {
-+      const file = input.files[0];
-+      input.value = "";
-+      if (!file) return;
-+      const current = ++selection;
++    async function preview(contents, current) {
 +      data = "";
-+      confirm.disabled = true;
++      confirm.disabled = renew.disabled = true;
 +      showRows([]);
-+      if (file.size > 1 << 20) {
-+        status.textContent = t("The file exceeds 1 MB.");
-+        return;
-+      }
 +      status.textContent = t("Reading file…");
-+      let contents;
 +      try {
-+        contents = await file.text();
-+      } catch {
-+        if (selection === current) status.textContent = t("Could not read the selected file.");
-+        return;
-+      }
-+      if (selection !== current) return;
-+      try {
-+        const result = await api("workbuddy/import", { data: contents, commit: false });
++        const result = await api("workbuddy/import", { data: contents, commit: false, renew: renew.checked });
 +        if (selection !== current) return;
 +        showRows(result.accounts);
 +        status.textContent = "";
@@ -593,15 +597,49 @@ index 0000000000000000000000000000000000000000..37f6174d24db8a73605737ce895328c5
 +        }
 +      } catch (error) {
 +        if (selection === current) status.textContent = t(error.message);
++      } finally {
++        if (selection === current) renew.disabled = false;
 +      }
++    }
++    renew.onchange = async () => {
++      if (selected && !saving) await preview(selected, ++selection);
++    };
++    input.onchange = async () => {
++      const file = input.files[0];
++      input.value = "";
++      if (!file) return;
++      const current = ++selection;
++      data = selected = "";
++      confirm.disabled = true;
++      renew.disabled = false;
++      showRows([]);
++      if (file.size > 1 << 20) {
++        status.textContent = t("The file exceeds 1 MB.");
++        return;
++      }
++      status.textContent = t("Reading file…");
++      renew.disabled = true;
++      let contents;
++      try {
++        contents = await file.text();
++      } catch {
++        if (selection === current) {
++          status.textContent = t("Could not read the selected file.");
++          renew.disabled = false;
++        }
++        return;
++      }
++      if (selection !== current) return;
++      selected = contents;
++      await preview(contents, current);
 +    };
 +
 +    confirm.onclick = async () => {
 +      if (!data || saving) return;
-+      saving = choose.disabled = close.disabled = confirm.disabled = true;
++      saving = choose.disabled = close.disabled = confirm.disabled = renew.disabled = true;
 +      status.textContent = t("Importing accounts…");
 +      try {
-+        const result = await api("workbuddy/import", { data, commit: true });
++        const result = await api("workbuddy/import", { data, commit: true, renew: renew.checked });
 +        showRows(result.accounts);
 +        status.textContent = "";
 +        if (!result.accounts.some((row) => row.status === "failed")) data = "";
@@ -609,7 +647,7 @@ index 0000000000000000000000000000000000000000..37f6174d24db8a73605737ce895328c5
 +      } catch (error) {
 +        status.textContent = t(error.message);
 +      } finally {
-+        saving = choose.disabled = close.disabled = false;
++        saving = choose.disabled = close.disabled = renew.disabled = false;
 +        confirm.disabled = !data;
 +        close.focus(NO_SCROLL);
 +      }
@@ -619,7 +657,7 @@ index 0000000000000000000000000000000000000000..37f6174d24db8a73605737ce895328c5
 +    dialog.addEventListener("keydown", (event) => event.stopPropagation());
 +    dialog.addEventListener("close", () => {
 +      selection++;
-+      data = "";
++      data = selected = "";
 +      dialog.remove();
 +      entry.focus(NO_SCROLL);
 +    });
@@ -972,10 +1010,10 @@ index 0000000000000000000000000000000000000000..05844d91edbbbc3e07eb4496c6d6f882
 +}
 diff --git a/internal/gui/workbuddy_import.go b/internal/gui/workbuddy_import.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..749aabdb989c376a1548e09648d1affcb36766c5
+index 0000000000000000000000000000000000000000..e5e5666a9cca656e9310a614e4c833b8169cd820
 --- /dev/null
 +++ b/internal/gui/workbuddy_import.go
-@@ -0,0 +1,411 @@
+@@ -0,0 +1,468 @@
 +package gui
 +
 +import (
@@ -995,13 +1033,15 @@ index 0000000000000000000000000000000000000000..749aabdb989c376a1548e09648d1affc
 +const wbPackage = "@magpie-community/opencode-workbuddy-auth"
 +
 +type importSecret struct {
-+	Access     string `json:"accessToken"`
-+	Expires    int64  `json:"expiresAt"`
-+	Domain     string `json:"domain"`
-+	UID        string `json:"uid"`
-+	Name       string `json:"nickname"`
-+	Enterprise string `json:"enterpriseId"`
-+	TokenType  string `json:"tokenType"`
++	Access         string `json:"accessToken"`
++	Expires        int64  `json:"expiresAt"`
++	Refresh        string `json:"refreshToken"`
++	RefreshExpires int64  `json:"refreshExpiresAt"`
++	Domain         string `json:"domain"`
++	UID            string `json:"uid"`
++	Name           string `json:"nickname"`
++	Enterprise     string `json:"enterpriseId"`
++	TokenType      string `json:"tokenType"`
 +}
 +type importFileRow struct {
 +	Provider string       `json:"provider"`
@@ -1160,13 +1200,7 @@ index 0000000000000000000000000000000000000000..749aabdb989c376a1548e09648d1affc
 +	return rows, nil
 +}
 +func normalizeImport(row importFileRow) (importedAccount, error) {
-+	s := row.Secret
-+	if s.Access == "" {
-+		s = row.Auth
-+	}
-+	if s.Access == "" {
-+		s = row.Flat
-+	}
++	s := importCredentials(row)
 +	uid := firstImport(row.UID, s.UID, row.Account.UID)
 +	for _, v := range []string{row.UID, s.UID, row.Account.UID} {
 +		if v != "" && strings.TrimSpace(v) != uid {
@@ -1224,6 +1258,38 @@ index 0000000000000000000000000000000000000000..749aabdb989c376a1548e09648d1affc
 +	}
 +	return importedAccount{site, uid, name, auth}, nil
 +}
++
++func importCredentials(row importFileRow) importSecret {
++	if row.Secret.Access != "" {
++		return row.Secret
++	}
++	if row.Auth.Access != "" {
++		return row.Auth
++	}
++	return row.Flat
++}
++
++func renewalImport(row importFileRow, account importedAccount) (importedAccount, error) {
++	secret := importCredentials(row)
++	if strings.TrimSpace(secret.Refresh) == "" {
++		return account, errors.New("This file has no refresh credential. Sign in on this computer to enable automatic renewal.")
++	}
++	if len(secret.Refresh) > 32768 || strings.ContainsAny(secret.Refresh, "\r\n\x00") {
++		return account, errors.New("The refresh credential is invalid.")
++	}
++	expires := importMillis(secret.RefreshExpires)
++	if expires < 0 || expires > 32503680000000 {
++		return account, errors.New("Invalid refresh expiration time.")
++	}
++	if expires > 0 && expires <= time.Now().UnixMilli() {
++		return account, errors.New("The refresh credential has expired. Sign in on this computer again.")
++	}
++	account.auth["refresh"] = secret.Refresh
++	if expires > 0 {
++		account.auth["refreshExpiresAt"] = expires
++	}
++	return account, nil
++}
 +func existingImports() (map[string]map[string]any, error) {
 +	entries, err := plugin.AuthEntries()
 +	if err != nil {
@@ -1264,7 +1330,7 @@ index 0000000000000000000000000000000000000000..749aabdb989c376a1548e09648d1affc
 +	return ""
 +}
 +
-+func previewImports(rows []importFileRow, all map[string]map[string]any) ([]importPreview, []importedAccount) {
++func previewImports(rows []importFileRow, all map[string]map[string]any, renew bool) ([]importPreview, []importedAccount) {
 +	previews := make([]importPreview, len(rows))
 +	normalized := make([]importedAccount, len(rows))
 +	seen := map[string]bool{}
@@ -1272,6 +1338,9 @@ index 0000000000000000000000000000000000000000..749aabdb989c376a1548e09648d1affc
 +	for i, row := range rows {
 +		p := importPreview{Index: i, Name: "Account {n}", Status: "invalid"}
 +		a, err := normalizeImport(row)
++		if err == nil && renew {
++			a, err = renewalImport(row, a)
++		}
 +		if err != nil {
 +			p.Detail = err.Error()
 +		} else {
@@ -1279,15 +1348,18 @@ index 0000000000000000000000000000000000000000..749aabdb989c376a1548e09648d1affc
 +			p.Name = a.name
 +			p.Site = map[string]string{"workbuddy": "WorkBuddy (China)", "workbuddy-ai": "WorkBuddy AI (International)"}[a.site]
 +			id := a.site + "|" + a.uid
-+			if seen[id] || importDuplicate(a, all) {
++			if seen[id] || (!renew && importDuplicate(a, all)) {
 +				p.Status = "duplicate"
 +				p.Detail = "Duplicate account. The existing sign-in will be kept."
-+			} else if problem := importLoginProblem(a, now); problem != "" {
++			} else if problem := importLoginProblem(a, now); !renew && problem != "" {
 +				p.Status = "reauth"
 +				p.Detail = problem
 +			} else {
 +				p.Status = "ready"
 +				p.Detail = "Ready to import. Sign in again when authorization expires."
++				if renew {
++					p.Detail = "Ready to transfer this sign-in and enable automatic renewal."
++				}
 +				seen[id] = true
 +			}
 +		}
@@ -1299,6 +1371,9 @@ index 0000000000000000000000000000000000000000..749aabdb989c376a1548e09648d1affc
 +var adoptImport = provider.Adopt
 +var listImport = plugin.Providers
 +var saveImport = plugin.ImportNewUID
++var renewImport = func(ctx context.Context, site string, texts []string) ([]provider.ImportedAccount, error) {
++	return provider.ImportPluginFiles(ctx, provider.PluginID(site), texts)
++}
 +var readImport = existingImports
 +var discoveryOffImport = settings.AccountDiscoveryOff
 +
@@ -1312,6 +1387,7 @@ index 0000000000000000000000000000000000000000..749aabdb989c376a1548e09648d1affc
 +	var in struct {
 +		Data   string `json:"data"`
 +		Commit bool   `json:"commit"`
++		Renew  bool   `json:"renew"`
 +	}
 +	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 7<<20)).Decode(&in) != nil {
 +		fail("Could not read the import request.")
@@ -1327,7 +1403,7 @@ index 0000000000000000000000000000000000000000..749aabdb989c376a1548e09648d1affc
 +		fail(err.Error())
 +		return
 +	}
-+	previews, accounts := previewImports(rows, all)
++	previews, accounts := previewImports(rows, all, in.Renew)
 +	if in.Commit {
 +		if discoveryOffImport() {
 +			fail("Enable subscription accounts in Magpie privacy settings first.")
@@ -1348,6 +1424,25 @@ index 0000000000000000000000000000000000000000..749aabdb989c376a1548e09648d1affc
 +			if message != "" {
 +				previews[i].Status = "failed"
 +				previews[i].Detail = message
++				continue
++			}
++			if in.Renew {
++				// The plugin validates and rotates the credential before saving
++				// it through the same path as a browser sign-in.
++				data, err := json.Marshal(a.auth)
++				if err != nil {
++					previews[i].Status = "failed"
++					previews[i].Detail = "Could not prepare the account for automatic renewal."
++					continue
++				}
++				results, err := renewImport(ctx, a.site, []string{string(data)})
++				if err != nil || len(results) != 1 || (results[0].Status != "added" && results[0].Status != "updated") {
++					previews[i].Status = "failed"
++					previews[i].Detail = "WorkBuddy could not renew this sign-in. Sign in on this computer again."
++					continue
++				}
++				previews[i].Status = "imported"
++				previews[i].Detail = "Imported with automatic renewal. The account stays saved; WorkBuddy may require sign-in again if it revokes the authorization."
 +				continue
 +			}
 +			if problem := importLoginProblem(a, time.Now().UnixMilli()); problem != "" {
@@ -1389,10 +1484,10 @@ index 0000000000000000000000000000000000000000..749aabdb989c376a1548e09648d1affc
 +}
 diff --git a/internal/gui/workbuddy_import_test.go b/internal/gui/workbuddy_import_test.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..e8ff8ef7c7ff0a55083146bb7cdd02acacfdc700
+index 0000000000000000000000000000000000000000..431c37c6d8da204be08c8380ce7c5ecd09d989c5
 --- /dev/null
 +++ b/internal/gui/workbuddy_import_test.go
-@@ -0,0 +1,193 @@
+@@ -0,0 +1,263 @@
 +package gui
 +
 +import (
@@ -1406,6 +1501,7 @@ index 0000000000000000000000000000000000000000..e8ff8ef7c7ff0a55083146bb7cdd02ac
 +	"time"
 +
 +	"github.com/yetone/magpie/internal/plugin"
++	"github.com/yetone/magpie/internal/provider"
 +)
 +
 +const cnFixture = `{"provider":"codebuddy","uid":"cn-user","nickname":"Fixture CN","secret":{"accessToken":"fixture-access-cn","refreshToken":"fixture-refresh-cn","expiresAt":1800000000,"domain":"copilot.tencent.com","uid":"cn-user"}}`
@@ -1504,6 +1600,75 @@ index 0000000000000000000000000000000000000000..e8ff8ef7c7ff0a55083146bb7cdd02ac
 +		return true, nil
 +	}
 +	return all
++}
++
++func callRenewableImport(t *testing.T, data string, commit bool) string {
++	t.Helper()
++	body, _ := json.Marshal(map[string]any{"data": data, "commit": commit, "renew": true})
++	w := httptest.NewRecorder()
++	Handler(nil, nil).ServeHTTP(w, httptest.NewRequest("POST", "/api/workbuddy/import", strings.NewReader(string(body))))
++	return w.Body.String()
++}
++
++func TestWorkBuddyImportRenewsOnlyAfterConfirmation(t *testing.T) {
++	all := importHarness(t)
++	original := renewImport
++	t.Cleanup(func() { renewImport = original })
++	calls := 0
++	renewImport = func(_ context.Context, site string, texts []string) ([]provider.ImportedAccount, error) {
++		calls++
++		if site != "workbuddy" || len(texts) != 1 {
++			t.Fatal("unexpected renewable import")
++		}
++		var auth map[string]any
++		if err := json.Unmarshal([]byte(texts[0]), &auth); err != nil {
++			t.Fatal(err)
++		}
++		if auth["refresh"] != "fixture-refresh-cn" || auth["uid"] != "cn-user" {
++			t.Fatal("renewal credential or account identity missing")
++		}
++		auth["access"], auth["refresh"] = "renewed-access-fixture", "renewed-refresh-fixture"
++		all["workbuddy#cn-user"] = auth
++		return []provider.ImportedAccount{{Status: "updated", User: "cn-user"}}, nil
++	}
++	// An existing access-only login can be upgraded. Its expired access
++	// token does not prevent WorkBuddy from validating its refresh token.
++	all["workbuddy#cn-user"] = map[string]any{"uid": "cn-user", "access": "previous-access-fixture"}
++	expired := strings.Replace(cnFixture, `"expiresAt":1800000000`, `"expiresAt":1700000000`, 1)
++	preview := callRenewableImport(t, expired, false)
++	if calls != 0 || !strings.Contains(preview, `"status":"ready"`) || strings.Contains(preview, "fixture-refresh") {
++		t.Fatal("preview renewed, leaked or rejected the renewable account")
++	}
++	result := callRenewableImport(t, expired, true)
++	if calls != 1 || !strings.Contains(result, `"status":"imported"`) || strings.Contains(result, "fixture") {
++		t.Fatal("confirmation did not complete renewable import safely")
++	}
++	if all["workbuddy#cn-user"]["refresh"] != "renewed-refresh-fixture" {
++		t.Fatal("renewed sign-in not retained")
++	}
++}
++
++func TestWorkBuddyImportRenewalRequiresUsableRefresh(t *testing.T) {
++	all := importHarness(t)
++	original := renewImport
++	t.Cleanup(func() { renewImport = original })
++	calls := 0
++	renewImport = func(context.Context, string, []string) ([]provider.ImportedAccount, error) {
++		calls++
++		return nil, errors.New("refresh-fixture-secret")
++	}
++	missing := strings.Replace(cnFixture, `"refreshToken":"fixture-refresh-cn",`, "", 1)
++	expired := strings.Replace(cnFixture, `"refreshToken":"fixture-refresh-cn"`, `"refreshToken":"fixture-refresh-cn","refreshExpiresAt":1700000000`, 1)
++	for _, data := range []string{missing, expired} {
++		result := callRenewableImport(t, currentFixture(data), true)
++		if calls != 0 || len(all) != 0 || !strings.Contains(result, `"status":"invalid"`) {
++			t.Fatal("an unusable refresh credential reached renewal")
++		}
++	}
++	result := callRenewableImport(t, currentFixture(cnFixture), true)
++	if calls != 1 || len(all) != 0 || !strings.Contains(result, `"status":"failed"`) || strings.Contains(result, "refresh-fixture-secret") {
++		t.Fatal("renewal failure leaked a credential or reported success")
++	}
 +}
 +func currentFixture(data string) string {
 +	return strings.ReplaceAll(data, "1800000000", strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10))
