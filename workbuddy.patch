@@ -1752,18 +1752,9 @@ index 0000000000000000000000000000000000000000..431c37c6d8da204be08c8380ce7c5ecd
 +	}
 +}
 diff --git a/internal/plugin/host.js b/internal/plugin/host.js
-index 1139a516940afbddbee60baa5a3b02bae27b2faf..4a531594a13b4bc95cc387d41bb562714f19d365 100644
+index 1139a516940afbddbee60baa5a3b02bae27b2faf..18971fa2c42daead38ef2a1111e2dc26a219b63d 100644
 --- a/internal/plugin/host.js
 +++ b/internal/plugin/host.js
-@@ -1177,7 +1177,7 @@ function changeAuth(change) {
-     const unlock = await lockAuth()
-     try {
-       const { all, known } = await readAuthStateAsync()
--      const out = change(all)
-+      const out = change(all, known)
-       // sign-ins that don't read are never written over with none: a
-       // sign-out of one of them waits for the file to be put right
-       if (out !== false && (known || Object.keys(all).length > 0)) await writeAuth(all)
 @@ -3587,6 +3587,21 @@ const handlers = {
    // import keeps a sign-in made elsewhere as one of provider's accounts;
    // with a key, as that account again (one taken back)
@@ -1771,8 +1762,8 @@ index 1139a516940afbddbee60baa5a3b02bae27b2faf..4a531594a13b4bc95cc387d41bb56271
 +    if (p.keepUID) {
 +      const uid = uidOf(p.auth)
 +      if (!uid) throw new Error("Missing account UID")
-+      const key = await changeAuth((all, known) => {
-+        if (!known) throw new Error("Saved accounts could not be read")
++      const key = await changeAuth((all) => {
++        if (!readAuthState().known) throw new Error("Saved accounts could not be read")
 +        if (p.auth.expires <= Date.now()) throw new Error("Authorization expired")
 +        if (accountsOf(all, p.provider).some((k) => uidOf(all[k]) === uid)) return false
 +        const key = p.provider + "#" + randomUUID()
@@ -1809,19 +1800,45 @@ index 57f80609f4f8469ad0135fda65935977e0b7172e..add50c48d4df36359bebc1225ee8a076
  // models hook said the vendor refused the sign-in, if it did.
 diff --git a/internal/plugin/workbuddy_import_test.go b/internal/plugin/workbuddy_import_test.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..6120bb80319f8e1525aa7f3a066b7198473b25df
+index 0000000000000000000000000000000000000000..f4d32b17ed573d52d2cb1f1b896c5ef79367377f
 --- /dev/null
 +++ b/internal/plugin/workbuddy_import_test.go
-@@ -0,0 +1,92 @@
+@@ -0,0 +1,118 @@
 +package plugin
 +
 +import (
++	"bytes"
 +	"context"
 +	"os"
++	"path/filepath"
 +	"sync"
 +	"testing"
 +	"time"
 +)
++
++func TestWorkBuddyImportPreservesUnreadableAuth(t *testing.T) {
++	sandbox(t)
++	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
++	defer cancel()
++	if err := os.MkdirAll(filepath.Dir(AuthPath()), 0o700); err != nil {
++		t.Fatal(err)
++	}
++	broken := []byte(`{"saved-account":`)
++	if err := os.WriteFile(AuthPath(), broken, 0o600); err != nil {
++		t.Fatal(err)
++	}
++	auth := map[string]any{
++		"type": "oauth", "uid": "new-fixture", "accountId": "new-fixture",
++		"access": "fixture-access", "expires": time.Now().Add(time.Hour).UnixMilli(),
++	}
++	if saved, err := ImportNewUID(ctx, "workbuddy", auth); err == nil || saved {
++		t.Fatal("an import replaced unreadable saved accounts")
++	}
++	after, err := os.ReadFile(AuthPath())
++	if err != nil || !bytes.Equal(after, broken) {
++		t.Fatalf("unreadable saved accounts changed: %v", err)
++	}
++}
 +
 +func TestImportNewUIDKeepsExistingSignIn(t *testing.T) {
 +	sandbox(t)

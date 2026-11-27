@@ -14,7 +14,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parent
 BASE = "v0.1.3908"
-REVISION = 11
+REVISION = 12
 UPSTREAM = "yetone/magpie-releases"
 SOURCE = "https://github.com/yetone/magpie.git"
 MAX_FALLBACKS = 4
